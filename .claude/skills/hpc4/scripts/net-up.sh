@@ -2,18 +2,32 @@
 # ネットワーク層の準備：HPC4 (143.89.184.3) に届く経路を確保する。
 #
 # 段階的アプローチ（やること最小化）：
+#   (0) 原因ベース事前判定（probe なし、即時）：interface 状態だけで「外部ネット
+#       + VPN なし」「経路候補なし」を確定して即 exit。timeout を待たせない。
 #   (1) 既に届く → 何もしない
 #   (2) 経路候補（en0 / Ivanti utun）を検出しルート追加 → 届けば終了
 #   (3) まだ届かない かつ フル VPN (NordVPN / SurfShark / ExpressVPN / Proton 等)
 #       が default を奪っているようなら、pf anchor で HPC4 宛だけ例外許可
 #
-# sudo が必要なのは (2)(3) の追加適用時のみ。(1) なら sudo 不要。
+# sudo が必要なのは (2)(3) の追加適用時のみ。(0)(1) なら sudo 不要。
 
 set -u
 source "$(dirname "$0")/common.sh"
 
+# --- (0) 原因ベース事前判定 -------------------------------------------------
+# probe（ping/TCP22）に頼らず interface 状態だけで結論を出す。
+# 「外部ネット+VPNなし」のように到達不可と確定するケースを 0 秒で弾く。
+verdict="$(classify_network)"
+case "$verdict" in
+    ng:no-reach:*|ng:no-route)
+        render_network_verdict "$verdict" >&2
+        err "原因ベース判定で接続不可と確定しました。ネットワーク修正後に再実行してください"
+        exit 1
+        ;;
+esac
+
 # --- (1) 既に届くなら終了 ----------------------------------------------------
-if ping_ok 2 || tcp22_ok; then
+if tcp22_ok 3; then
     iface="$(current_hpc4_iface)"
     ok "HPC4 に到達済み（経由: ${iface:-default route}）"
     exit 0
@@ -64,7 +78,7 @@ else  # ivanti
 fi
 
 # 再テスト
-if ping_ok 2 || tcp22_ok; then
+if tcp22_ok 3; then
     ok "HPC4 到達確認（経由: $(current_hpc4_iface)）"
     exit 0
 fi
@@ -98,7 +112,7 @@ else
 fi
 
 # 最終テスト
-if ping_ok 3 || tcp22_ok; then
+if tcp22_ok 3; then
     ok "HPC4 到達確認（経由: $(current_hpc4_iface)）"
     exit 0
 fi
