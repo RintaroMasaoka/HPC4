@@ -2,6 +2,10 @@
 
 HKUST HPC4 クラスタへの SSH / コマンド実行 / ファイル転送を、ネットワーク経路の面倒ごと込みで自動化する Claude Code 用 skill。Mac (オンキャンパス / オフキャンパス + HKUST SSL VPN / NordVPN 等のフル VPN 併用) のどの状態でも同じ呼び方で繋がる。
 
+## 背景
+
+Claude (Anthropic API) は香港をサービス対象外リージョンとしており、一方 HPC4 (`hpc4.ust.hk`) は HKUST のネットワーク（143.89/16 IP 帯 — オンキャンパスの eduroam / 有線、または HKUST SSL VPN 経由）からしか到達できない。**Claude を使うには香港外を経由する必要があり、HPC4 を使うには HKUST 圏内に居る必要がある** というジレンマを、**Claude 用の通信と HPC4 用の通信を同じ Mac 上で同居させる**ことで解消するのがこの skill の存在意義。具体的な同居の組み合わせは環境ごとに異なり、skill が自動判定して経路を整える。
+
 ## インストール
 
 skill 本体は `hpc4/` フォルダひとつ。これを Claude Code が読む場所に置けばよい。スコープは 2 択:
