@@ -1,7 +1,7 @@
 #!/bin/bash
 # HPC4 上で任意のコマンドを実行する。
 #   ./ssh-run.sh "<command>"
-# 内部で net-up.sh を呼ぶので、ルートと pf anchor は自動整備される。
+# 経路が未整備なら net-up.sh を呼んで HPC4 host route を pin する。
 # 認証は passwordless SSH（要 setup 済）。ControlMaster で 2 回目以降は即レス。
 
 set -u
