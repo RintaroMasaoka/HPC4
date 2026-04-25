@@ -6,11 +6,21 @@ user-invocable: true
 
 # hpc4 — HKUST HPC4 接続スキル
 
-HKUST HPC4 (`hpc4.ust.hk`) クラスタへのアクセスを、ネットワーク経路（オンキャンパス直結 / HKUST SSL VPN / キルスイッチ型フル VPN）の面倒ごと込みで自動化する。VPN の種類・有無は自動判定するため事前設定は不要。
+HKUST HPC4 (`hpc4.ust.hk`) クラスタへの SSH 接続を、Claude 通信と同居させる前提で支援する。
 
 ## 背景
 
-Claude (Anthropic API) は香港をサービス対象外としており、一方 HPC4 は HKUST のネットワーク（143.89/16 IP 帯 — オンキャンパスの eduroam / 有線、または HKUST SSL VPN 経由）からしか到達できない。**Claude を使うには香港外を経由する必要があり、HPC4 を使うには HKUST 圏内に居る必要がある** というジレンマを、**Claude 用の通信と HPC4 用の通信を同じ Mac 上で同居させる**ことで解消するのがこの skill の存在意義。具体的な同居の組み合わせは環境ごとに異なり、後述の `classify_network` がそれを自動判定する。
+Claude (Anthropic API) は香港をサービス対象外としており、一方 HPC4 は HKUST のネットワーク（143.89/16 IP 帯 — オンキャンパスの eduroam / 有線、または HKUST SSL VPN 経由）からしか到達できない。**Claude を使うには香港外を経由する必要があり、HPC4 を使うには HKUST 圏内に居る必要がある**。同じ Mac 上で「Claude 用の経路（NordVPN 等で日本／第三国経由）」と「HPC4 用の経路（HKUST 直結 or Ivanti split-tunnel）」を同居させるのが運用の前提。
+
+この同居は実は VPN 製品（NordVPN, Ivanti 等）が起動時に kernel routing table に書き込む結果として **OS が自然に成立させる**：default route は NordVPN、`143.89/16` connected route は Ivanti、longest-prefix-match で衝突なし。skill 自身は default route や Claude 経路に絶対手を出さず、**HPC4 (143.89.184.3) の host route 1 つだけを管理する**。
+
+## 設計上の不変条件：Claude が落ちている時に user が単独で復旧できる
+
+このスキルが Claude API 経由で動作する以上、**「Claude が unreachable な瞬間こそ user が一番困る」** という catch-22 がある。Claude が落ちている時、user は私に相談できず、terminal だけで状況を把握して action する必要がある。これを設計に直接織り込む：
+
+- **scripts の出力は terminal で直読する前提の日本語**。「Claude が解釈する」前提の verdict 文字列を user に提示しない。
+- **scripts は default route や Claude 経路に絶対に触らない**。skill が Claude 接続を巻き添えにする可能性を排除する。
+- **L4 で塞がれている時は user の VPN クライアント GUI 操作（out-of-band action）を案内する**。skill 内で workaround を試みない。
 
 ## このスキルの位置付け
 
@@ -18,7 +28,7 @@ Claude (Anthropic API) は香港をサービス対象外としており、一方
 
 ## Claude が呼べる scripts
 
-下表の scripts はすべて `bash .claude/skills/hpc4/scripts/<name>.sh [args]` の形で Bash ツールから直接叩ける。**`ssh-run.sh` / `xfer.sh` は内部で経路（ルート + pf）を自動整備するので、経路を意識せず目的の操作を直接呼んでよい**。
+下表の scripts はすべて `bash .claude/skills/hpc4/scripts/<name>.sh [args]` の形で Bash ツールから直接叩ける。**`ssh-run.sh` / `xfer.sh` は内部で host route を自動 pin するので、経路を意識せず目的の操作を直接呼んでよい**。
 
 | script | 引数 | Claude がこれを呼ぶべき場面 |
 |---|---|---|
@@ -26,8 +36,8 @@ Claude (Anthropic API) は香港をサービス対象外としており、一方
 | `ssh-run.sh` | `'<command>'` | HPC4 上で任意コマンドを実行したい時（`squeue`、`sbatch`、`ls`、`cat` 等。経路は自動整備） |
 | `xfer.sh` | `put <l> <r>` / `get <r> <l>` | 単一ファイルの往復（スクリプト、小さい結果ファイル等） |
 | `xfer.sh` | `put-r <l> <r>` / `get-r <r> <l>` | ディレクトリ単位の rsync 転送（大量結果の引き上げ等） |
-| `net-up.sh` | なし | 経路だけ整えて接続テストしたい時、または status で経路欠落を発見した時 |
-| `net-down.sh` | なし | 経路や pf anchor を完全リセットしたい時（トラブル時のみ） |
+| `net-up.sh` | なし | HPC4 host route を pin したい時、または status で TCP 22 不通を発見した時 |
+| `net-down.sh` | なし | HPC4 host route と ControlMaster をリセットしたい時（トラブル時のみ） |
 | `write-user-conf.sh` | `<itso_username>` | `user.conf.local` を生成したい時（setup フロー A で使う） |
 
 setup フロー（`user.conf.local` 生成 + passwordless SSH 確立）は単一の script ではなく **本ファイル後段の「setup フロー」節** に手順がある。Claude はそれを順に踏む。
@@ -37,25 +47,27 @@ setup フロー（`user.conf.local` 生成 + passwordless SSH 確立）は単一
 **まず最初に `bash .claude/skills/hpc4/scripts/status.sh` を走らせ**、その出力を見て分岐:
 
 1. `user.conf.local` が無い → ユーザに ITSO 名を聞いて `write-user-conf.sh` で書き出し、もう一度 status.sh から始める
-2. ネットワーク verdict が `[ng] ...` → **status.sh の救済アクション文をそのまま提示**（例：「Ivanti Secure Access を起動するか eduroam/HKUST 有線に接続してください」）。修正後に再開するよう案内し、setup を **ここで止める**（ssh-copy-id まで進めない）
-3. ネットワーク verdict が `[ok]` + passwordless SSH 未成立 → **setup ステップ C を実行**（`ssh-copy-id` を別ターミナルで打ってもらう案内。これが許容されるのはここだけ）
-4. 全部成立している → ユーザが `/hpc4` を直接打った場合は **何をしたいかを 1 文で聞く**（例: 「HPC4 のセットアップは済んでいます。何をしますか？（例: queue 確認 / ジョブ投入 / ファイル転送 / 状態確認）」）。Claude 自律呼び出しの場合は文脈から目的の script を選んで進める
+2. `[ng] HPC4 経路：...` → status.sh が出した日本語の指示（「Ivanti Secure Access を起動してください」等）をそのまま提示。修正後に再開するよう案内し、setup を **ここで止める**（ssh-copy-id まで進めない）
+3. `[ng] TCP 22 不通` → `bash .claude/skills/hpc4/scripts/net-up.sh` を呼んで host route を pin する。それでも不通なら net-up.sh が出した VPN クライアント設定の指示をそのまま提示
+4. ネットワーク `[ok]` + passwordless SSH 未成立 → **setup ステップ C を実行**（`ssh-copy-id` を別ターミナルで打ってもらう案内。これが許容されるのはここだけ）
+5. 全部成立している → ユーザが `/hpc4` を直接打った場合は **何をしたいかを 1 文で聞く**（例: 「HPC4 のセットアップは済んでいます。何をしますか？（例: queue 確認 / ジョブ投入 / ファイル転送 / 状態確認）」）。Claude 自律呼び出しの場合は文脈から目的の script を選んで進める
 
 ## 動作規約
 
 1. **冪等性**: `net-up.sh` を含むあらゆる script は何度呼んでも壊れない。既に整っていれば no-op で抜ける
-2. **原因ベース判定を先に**: ネットワーク状態は **interface 状態（en0 IP / Ivanti utun / default route）から HPC4 への到達性を分類**してから動く。`classify_network`（common.sh）が 0 秒で verdict を出すので、NG が確定する状態では権限操作も probe も走らせず即誘導する
-3. **必要最小限の介入**: verdict が ok の時のみ実介入（`net-up.sh` の route 追加 / pf anchor）に進む
-4. **個人情報の隔離**: ITSO ユーザ名等は `user.conf.local`（gitignored）に閉じる。リポジトリ本体には書かない
-5. **シェル操作をユーザに依頼しない（precondition を満たした時だけ依頼）**: 設定値は Claude がチャットで質問し `Write` で書き出す。`cp` や `chmod` をユーザに打たせない。`ssh-copy-id` のように password+2FA が必要なものは別ターミナル依頼が許容されるが、**ネットワーク verdict が ok でない限り依頼しない**
-6. **応答は短く**: 結果（ok / err / 要約）だけを返す。冗長な進捗説明は控える
+2. **触る対象は HPC4 host route ただ 1 つ**: `net-up.sh` も `net-down.sh` も 143.89.184.3 の host route だけを操作する。default route や Claude 経路には絶対に手を出さない
+3. **VPN 製品の判別はしない**: kernel に「HPC4 をどの IF に出すか」と聞き、その IF が 143.89/16 IP を持っているかだけで判定する。NordVPN だの Ivanti だの製品名で分岐しない
+4. **L4 で塞がれている時は out-of-band action を案内する**: skill 内で workaround を試みず、user の VPN クライアント GUI で 143.89.184.3 を例外設定する手順を terminal 直読の日本語で出す
+5. **個人情報の隔離**: ITSO ユーザ名等は `user.conf.local`（gitignored）に閉じる。リポジトリ本体には書かない
+6. **シェル操作をユーザに依頼しない（precondition を満たした時だけ依頼）**: 設定値は Claude がチャットで質問し `Write` で書き出す。`cp` や `chmod` をユーザに打たせない。`ssh-copy-id` のように password+2FA が必要なものは別ターミナル依頼が許容されるが、**ネットワーク verdict が ok でない限り依頼しない**
+7. **応答は短く**: 結果（ok / err / 要約）だけを返す。冗長な進捗説明は控える
 
 ## 対象環境
 
 - **クラスタ**: `hpc4.ust.hk` (143.89.184.3)、Slurm account 既定値 `watanabemc`（user.conf.local で override 可能）
 - **クライアント OS**: macOS。Linux/Windows は対応外
 - **認証**: 公開鍵認証 (passwordless SSH) + ControlMaster 12h 永続化
-- **ネットワーク**: オンキャンパス（eduroam / HKUST 有線）、オフキャンパス（Ivanti Secure Access = HKUST SSL VPN）、キルスイッチ型フル VPN（NordVPN / SurfShark / ExpressVPN / Proton / Mullvad 等）と共存可能
+- **ネットワーク**: HPC4 (143.89/16) に届く IF が 1 つでもあれば動く。具体的には：オンキャンパス（eduroam / HKUST 有線）、オフキャンパス（Ivanti Secure Access = HKUST SSL VPN）。default route を別 VPN（NordVPN 等）が握っていても、その VPN の kill-switch / packet filter / NEPacketTunnelProvider が 143.89.184.3 行きを遮断していなければ host route で抜けられる
 
 ## setup フロー（初回 1 回だけ）
 
@@ -72,14 +84,14 @@ setup フロー（`user.conf.local` 生成 + passwordless SSH 確立）は単一
 
 ### ステップ B. HPC4 への到達性判定（status.sh が起点）
 
-`bash .claude/skills/hpc4/scripts/status.sh` を実行し、`HPC4 到達性:` 行の verdict で分岐：
+`bash .claude/skills/hpc4/scripts/status.sh` を実行し、出力の各 stage を見て分岐：
 
-- `[ok] HPC4 到達性: 同 LAN 直結` または `[ok] HPC4 到達性: split-tunnel VPN 経由` → そのままステップ C へ。route 追加が要るケース（HPC4 ルート未設定）は `bash .claude/skills/hpc4/scripts/net-up.sh` を呼ぶ
-- `[ng] HPC4 到達性: 不通 ...` → status.sh が出した救済文をそのままユーザに伝える（「Ivanti Secure Access を起動するか eduroam/HKUST 有線に接続してください」）。修正後 `/hpc4` で再開させ、**ssh-copy-id まで進めない**
-- `[ng] HPC4 到達性: 経路候補なし` → 「eduroam / HKUST 有線 / Ivanti のいずれかに接続してください」と伝え、再開待ち
-- `[ng] HPC4 到達性: default route が他 VPN に奪取` → `bash .claude/skills/hpc4/scripts/net-up.sh` を実行して pf anchor を注入
+- `[ok] HPC4 経路：<iface> 経由で HKUST 圏内` + `[ok] TCP 22 到達 OK` → そのままステップ C へ
+- `[ok] HPC4 経路：...` + `[ng] TCP 22 不通` → `bash .claude/skills/hpc4/scripts/net-up.sh` を実行（host route を pin して再判定）
+- `[ng] HPC4 経路：<iface> ...は HKUST 圏外（143.89/16 IP を持っていない）` → status.sh が出した日本語の救済文をそのままユーザに伝える（オンキャンパスなら eduroam/HKUST 有線、オフキャンパスなら Ivanti Secure Access）。修正後 `/hpc4` で再開させ、**ssh-copy-id まで進めない**
+- `[ng] HPC4 経路：kernel が一切経路を返しません` → 「eduroam / HKUST 有線 / Ivanti のいずれかに接続してください」と伝え、再開待ち
 
-要点：`net-up.sh` も先頭で同じ `classify_network` を呼び、不通/no-route の場合は **即 exit する**。user に sudo password を求めない。
+要点：`net-up.sh` は HKUST 圏外の場合は **route add せずに即 exit する**（user に sudo password を求めない）。L4 で塞がれている場合は VPN クライアント GUI 設定の手順を出す。
 
 ### ステップ C. passwordless SSH の確認
 
@@ -118,33 +130,29 @@ bash .claude/skills/hpc4/scripts/xfer.sh get-r /scratch/$USER/results results/
 
 ## ネットワーク層の仕組み（要点のみ）
 
-**判定の本質：HPC4 (143.89.184.3) に届くか**。HKUST 所属かどうかではない。
-HPC4 は 143.89/16 にいるので、自分が同 /16 にいる、もしくは tunnel で 143.89/16 に出られるなら届く。それ以外は届かない。これは **interface 状態だけで 0 秒で確定**できる。
+**判定の本質：HPC4 (143.89.184.3) に届く IF が 1 つでもあるか**。製品名（NordVPN / Ivanti / eduroam ...）で分岐しない。kernel に直接聞く。
 
-### `classify_network`（common.sh）の判定順
+### アルゴリズム（`net-up.sh` / `status.sh` の core）
 
-**判定は 2 段階**：まず「HPC4 へ届く下回り経路があるか」を見る（en0 が 143.89/16 / Ivanti utun に 143.89.* IP）。下回りが無ければ pf anchor では救えないので no-reach 確定。下回りがある時に限り、フル VPN によるキルスイッチで pf 遮断されているかを見る。
+1. **既存の HPC4 host pin を一度削除**（stale な pin が判定を歪めないように）
+2. **`route get 143.89.184.3` で kernel が選ぶ egress IF を取得**（`hpc4_route_resolve`）
+3. **その IF が 143.89/16 の IPv4 を持っているか確認**（`iface_has_hkust_ip`）。これが「HKUST 圏に届く」唯一の証拠
+   - 持っていれば → host route で pin（後で他 VPN が default を変えても longest-prefix-match で勝つ）
+   - 持っていなければ → kernel は default fallback で別経路に流しているだけで HPC4 には届かない。pin しても無駄なので即終了し、user に「HKUST 圏に入れ」と案内
+4. **TCP 22 で疎通テスト**。通れば終わり
+5. **L3 OK だが L4 で塞がれている**（VPN クライアントの kill-switch / NEPacketTunnelProvider 等）→ user の VPN GUI で 143.89.184.3 を例外設定する手順を出す
 
-| # | 条件 | verdict | 取るべき行動 |
-|---|---|---|---|
-| 1a | en0 IP が **143.89/16**（HPC4 と同 /16）+ フル VPN なし | `ok:lan-reach` | そのまま使う / 必要なら `route add -host` |
-| 1b | en0 IP が **143.89/16** + フル VPN が default を奪取 | `ng:fullvpn-hijack` | `bash .claude/skills/hpc4/scripts/net-up.sh` で pf anchor `main/hpc4` 注入 |
-| 2a | Ivanti utun に **143.89.\*** IP + フル VPN なし | `ok:vpn-tunnel` | split-tunnel 経由 / 必要なら `route add -host -interface` |
-| 2b | Ivanti utun に **143.89.\*** IP + フル VPN が default を奪取 | `ng:fullvpn-hijack` | `bash .claude/skills/hpc4/scripts/net-up.sh` で pf anchor `main/hpc4` 注入 |
-| 3 | en0 ゲートウェイも Ivanti も無い | `ng:no-route` | eduroam / 有線 / Ivanti のいずれかに接続するよう案内 |
-| 4 | en0 はあるが HKUST 圏外 + Ivanti 無し（フル VPN の有無は無関係） | `ng:no-reach` | Ivanti 起動 or 学内ネット切替を案内（pf anchor では救えない） |
+### なぜこれで足りるか
 
-ポイント：
-- HKUST の end-user ネット（eduroam / 有線 / Ivanti）は **143.89/16 を直接配布する**。よって en0 が 143.89/16 でない && Ivanti utun も無い → HKUST 外ネット → HPC4 不通、と確定できる
-- 全ケース probe 不要で **0 秒判定**
-- **fullvpn-hijack 判定は下回りがある時のみ出す**。en0 がホットスポット等の HKUST 圏外の時は、フル VPN を止めても en0 自身が HPC4 へ届く経路を持たないので no-reach に倒す。逆に下回り（en0 on HKUST or Ivanti）がある時は kernel が longest-prefix で 143.89/16 を connected route に流すが、フル VPN の pf が en0/utun の出力を塞ぐので anchor 例外が要る
-- フル VPN（ケース 1b/2b）の対象は NordVPN / SurfShark / ExpressVPN / Proton / Mullvad などキルスイッチ型。Ivanti は split-tunnel なので `fullvpn_default_route` の対象外
+- HKUST の end-user ネット（eduroam / 有線 / Ivanti）は **143.89/16 を直接配布する**ので、IF が 143.89/16 IP を持っているか否かで「HKUST 圏に居るか」を一意に判定できる
+- host route は longest-prefix で勝つので、default route が他 VPN に握られていても HPC4 だけは抜ける（製品判別不要）
+- L4 遮断の解消は user space からは不可能なので、out-of-band action（VPN GUI 操作）を案内する以外の選択肢はない
 
 SSH 側は ControlMaster で 12h persist、password+2FA は実質 1 日 1 回で済む。
 
 ## sudo が必要な操作について
 
-`net-up.sh` と `net-down.sh` は `route` と `pfctl` を触るため sudo が要る。Touch ID を有効にしておくと Claude Code の Bash ツールからでも指紋で通る。そうでなければ password 入力ダイアログが 1 回だけ出る。
+`net-up.sh` と `net-down.sh` は `route` を触るため sudo が要る。Touch ID を有効にしておくと Claude Code の Bash ツールからでも指紋で通る。そうでなければ password 入力ダイアログが 1 回だけ出る。
 
 ## トラブル時の当たり方
 
@@ -241,7 +249,7 @@ login node は共用なので CPU/I/O を握るスクリプトを直接走らせ
 これらは本 skill が既に対策を組み込んでいるが、症状を知っておくと debug が早い:
 
 1. **macOS の SSH が DNS を解けない**: macOS の `getaddrinfo` は `/etc/resolv.conf` のみを参照する。Ivanti 等の split-tunnel VPN は `scutil` 側にしか DNS を push しないため、`host hpc4.ust.hk` は通るのに `ssh hpc4` だけ "Could not resolve" になる → 本 skill の `ssh_config` は HostName を IP 直指定（`HostKeyAlias` で known_hosts 整合は維持）
-2. **キルスイッチ型 VPN が split-tunnel utun の出力を pf で塞ぐ**: NordVPN 等は en0 と utun の両方を pf で塞ぐ。Ivanti モードでも HPC4 宛 utun 経由を許可する pf anchor が要る → `net-up.sh` は en0/Ivanti 両モードで自動的に anchor を入れる
+2. **VPN クライアントの kill-switch が L4 で 143.89.184.3 行きを遮断する**: NEPacketTunnelProvider (`includeAllNetworks=true`) や VPN クライアント独自の packet filter で塞がれる。kernel routing は正しいので skill 側からは復旧不能 → `net-up.sh` が user に「VPN クライアント GUI で 143.89.184.3 を例外設定する」手順を terminal 直読の日本語で出す
 3. **ルートが再起動・スリープで消える**: macOS の host route は永続化されない。スリープ復帰時は `bash .claude/skills/hpc4/scripts/net-up.sh` を再実行（冪等）
 4. **`scp -l` は username ではなく bandwidth limit**: ssh の `-l user` と違い、scp の `-l` は kbps 制限。username は `-o User=...` か `user@host:path` で渡す（本 skill の `xfer.sh` は ssh_config 経由で正しく渡している）
 
