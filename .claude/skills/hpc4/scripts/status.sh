@@ -11,7 +11,7 @@ if [[ -f "$USER_CONF" ]] && [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "you
     printf "  [ok]   user.conf.local 読み込み済み (HPC4_USER=%s, account=%s, partition=%s)\n" \
         "$HPC4_USER" "$HPC4_ACCOUNT" "$HPC4_PARTITION"
 else
-    printf "  [err]  user.conf.local 未作成。'/hpc4 setup' を実行してください\n"
+    printf "  [err]  user.conf.local 未作成。Claude に「HPC4 のセットアップを」と頼むか、scripts/write-user-conf.sh <itso_username> を直接実行してください\n"
 fi
 
 # ネットワーク層（生情報）
@@ -41,7 +41,7 @@ fi
 if ping_ok 2; then
     printf "  [ok]   ping %s OK\n" "$HPC4_IP"
 else
-    printf "  [ng]   ping %s 失敗（経路は OK だが疎通不可。'/hpc4 up' を試してください）\n" "$HPC4_IP"
+    printf "  [ng]   ping %s 失敗（経路は OK だが疎通不可。scripts/net-up.sh を試してください）\n" "$HPC4_IP"
 fi
 
 # 認証層（同じく OK 判定の時のみ）
@@ -49,7 +49,7 @@ if [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "your_itso_username" ]]; then
     if ssh_passwordless_ok; then
         printf "  [ok]   passwordless SSH 成立\n"
     else
-        printf "  [ng]   passwordless SSH 未成立 ('/hpc4 setup' で公開鍵登録が必要)\n"
+        printf "  [ng]   passwordless SSH 未成立 (setup フローで公開鍵登録が必要)\n"
     fi
 
     # ControlMaster の状態

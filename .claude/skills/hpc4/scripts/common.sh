@@ -26,7 +26,7 @@ fi
 
 require_user_conf() {
     if [[ -z "${HPC4_USER:-}" ]]; then
-        printf "[hpc4][err] %s\n" "個人設定 ${USER_CONF} がありません。'/hpc4 setup' を実行してください。" >&2
+        printf "[hpc4][err] %s\n" "個人設定 ${USER_CONF} がありません。setup フロー (scripts/write-user-conf.sh <itso_username>) を実行してください。" >&2
         exit 1
     fi
 }
@@ -128,7 +128,8 @@ is_in_hpc4_subnet() {
 #   ok:lan-reach:en0_ip=143.89.x.x          en0 が HPC4 と同 /16。LAN 直結
 #   ok:vpn-tunnel:iface=utun9               Ivanti split-tunnel utun に 143.89.* IP
 #   ng:fullvpn-hijack:iface=utunX           HKUST 到達手段はあるがフル VPN が default を奪取
-#                                           （en0 が HKUST 圏内 or Ivanti が立っている時のみ）
+#                                           （en0 が HKUST 圏内 or Ivanti が立っている時のみ。
+#                                           net-up.sh で pf anchor を入れて救う）
 #   ng:no-route                             en0 ゲートウェイも VPN tunnel も無い
 #   ng:no-reach:en0_ip=172.16.x.x           en0 はあるが HKUST 外 + VPN 未接続
 #                                           （pf anchor では救えない。要 Ivanti 起動 or 学内切替）
@@ -137,7 +138,7 @@ is_in_hpc4_subnet() {
 #
 # 設計上の要点：fullvpn-hijack 判定は **HKUST に届く下回り（en0 が 143.89/16
 # にいる、または Ivanti utun が立っている）が既にある場合のみ** 出す。下回りが
-# 無い時にこの verdict を出すと「`/hpc4 up` で pf anchor を入れれば直る」と
+# 無い時にこの verdict を出すと「net-up.sh で pf anchor を入れれば直る」と
 # 誤誘導になる（pf anchor は経路の代わりにはならない）。
 classify_network() {
     local en0_gw en0_ip ivanti_if fullvpn_if
@@ -194,7 +195,7 @@ render_network_verdict() {
             printf "  [ok]   HPC4 到達性: split-tunnel VPN 経由 (%s)\n" "$detail"
             ;;
         fullvpn-hijack)
-            printf "  [ng]   HPC4 到達性: default route が他 VPN (%s) に奪取 → '/hpc4 up' で pf anchor 例外を適用してください\n" "$detail"
+            printf "  [ng]   HPC4 到達性: default route が他 VPN (%s) に奪取 → scripts/net-up.sh で pf anchor 例外を適用してください\n" "$detail"
             ;;
         no-reach)
             printf "  [ng]   HPC4 到達性: 不通 (%s) → Ivanti Secure Access を起動するか eduroam/HKUST 有線に接続してください\n" "$detail"

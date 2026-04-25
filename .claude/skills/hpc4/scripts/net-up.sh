@@ -118,7 +118,7 @@ if tcp22_ok 3; then
 fi
 
 err "すべての対策を試しましたが HPC4 に届きません。"
-err "'/hpc4' で status を取り、手動で診断してください："
+err "scripts/status.sh で現状を取り、手動で診断してください："
 err "  - VPN を再接続してから再実行"
 err "  - pfctl -a ${PF_ANCHOR} -sr でルール確認"
 err "  - ssh -vvv で詳細ログ"
