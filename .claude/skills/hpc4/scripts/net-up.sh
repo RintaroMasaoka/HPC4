@@ -5,8 +5,8 @@
 #   (0) 原因ベース事前判定（probe なし、即時）：interface 状態だけで「外部ネット
 #       + VPN なし」「経路候補なし」を確定して即 exit。timeout を待たせない。
 #   (1) 既に届く → 何もしない
-#   (2) 経路候補（en0 / Ivanti utun）を検出しルート追加 → 届けば終了
-#   (3) まだ届かない かつ フル VPN (NordVPN / SurfShark / ExpressVPN / Proton 等)
+#   (2) 経路候補（en0 / HKUST tunnel）を検出しルート追加 → 届けば終了
+#   (3) まだ届かない かつ 香港外 VPN (NordVPN / SurfShark / ExpressVPN / Proton 等)
 #       が default を奪っているようなら、pf anchor で HPC4 宛だけ例外許可
 #
 # sudo が必要なのは (2)(3) の追加適用時のみ。(0)(1) なら sudo 不要。
@@ -35,18 +35,18 @@ fi
 
 # --- (2) 経路候補を検出 -----------------------------------------------------
 EN0_GW="$(detect_en0_gw)"
-IVANTI_IF="$(detect_ivanti_iface || true)"
+HKUST_IF="$(detect_hkust_tunnel_iface || true)"
 log "検出結果："
-log "  en0 gateway : ${EN0_GW:-(なし)}"
-log "  Ivanti utun : ${IVANTI_IF:-(なし)}"
+log "  en0 gateway   : ${EN0_GW:-(なし)}"
+log "  HKUST tunnel  : ${HKUST_IF:-(なし)}"
 
 MODE=""
-# Ivanti (HKUST SSL VPN) がある場合は最優先。
-# 理由：Ivanti が立っているなら 143.89/16 は必ず utun 経由で届く。
+# HKUST tunnel (Ivanti 等) がある場合は最優先。
+# 理由：HKUST tunnel が立っているなら 143.89/16 は必ずその IF 経由で届く。
 # 逆に en0 が HKUST 圏外（テザリング、自宅 wifi 等）なら en0 経由は無力。
-# オンキャンパス en0 でも Ivanti は split-tunnel なので共存して問題なし。
-if [[ -n "$IVANTI_IF" ]]; then
-    MODE="ivanti"
+# オンキャンパス en0 でも HKUST tunnel は split-tunnel なので共存して問題なし。
+if [[ -n "$HKUST_IF" ]]; then
+    MODE="hkust-tunnel"
 elif [[ -n "$EN0_GW" ]]; then
     MODE="en0"
 else
@@ -66,14 +66,14 @@ if [[ "$MODE" == "en0" ]]; then
         sudo route add -host "$HPC4_IP" "$EN0_GW" || { err "route add に失敗"; exit 1; }
         ok "ルート追加完了"
     fi
-else  # ivanti
-    if [[ "$(current_hpc4_iface)" == "$IVANTI_IF" ]]; then
-        ok "ルート ${HPC4_IP} → ${IVANTI_IF} は設定済み"
+else  # hkust-tunnel
+    if [[ "$(current_hpc4_iface)" == "$HKUST_IF" ]]; then
+        ok "ルート ${HPC4_IP} → ${HKUST_IF} は設定済み"
     else
         sudo route delete -host "$HPC4_IP" 2>/dev/null || true
-        log "sudo route add -host ${HPC4_IP} -interface ${IVANTI_IF}"
-        sudo route add -host "$HPC4_IP" -interface "$IVANTI_IF" || { err "route add に失敗"; exit 1; }
-        ok "ルート追加完了（Ivanti 経由）"
+        log "sudo route add -host ${HPC4_IP} -interface ${HKUST_IF}"
+        sudo route add -host "$HPC4_IP" -interface "$HKUST_IF" || { err "route add に失敗"; exit 1; }
+        ok "ルート追加完了（HKUST tunnel 経由）"
     fi
 fi
 
@@ -83,14 +83,14 @@ if tcp22_ok 3; then
     exit 0
 fi
 
-# --- (3) まだ届かない：フル VPN のキルスイッチを疑う ------------------------
-# NordVPN / SurfShark 等のキルスイッチ型フル VPN が稼働していると、en0 経路も
-# Ivanti utun も等しく pf で塞がれる（Ivanti 側も利用者空間で utun9 → en0 と
-# 再カプセル化する際に en0 出力が落とされる、あるいは pf が utun9 発のパケットも
-# 弾くため）。MODE に応じて該当 IF の HPC4 宛だけを pass する anchor を入れる。
+# --- (3) まだ届かない：香港外 VPN のキルスイッチを疑う ----------------------
+# NordVPN / SurfShark / ExpressVPN / Proton 等のキルスイッチ型フル VPN が稼働していると、
+# en0 経路も HKUST tunnel も等しく pf で塞がれる（HKUST tunnel 側も利用者空間で
+# utun → en0 と再カプセル化する際に en0 出力が落とされる、あるいは pf が tunnel 発の
+# パケットも弾くため）。MODE に応じて該当 IF の HPC4 宛だけを pass する anchor を入れる。
 vpn_if="$(fullvpn_default_route || true)"
 if [[ -n "$vpn_if" ]]; then
-    warn "default route が ${vpn_if} に奪われています（NordVPN / SurfShark 等が稼働中と推定）"
+    warn "default route が ${vpn_if} に奪われています（香港外 VPN が稼働中と推定）"
     warn "このタイプの VPN は非VPNトラフィックを pf で遮断するため、"
     warn "HPC4 宛だけ例外を許可する anchor を適用します（mode=${MODE}）。"
     if [[ "$MODE" == "en0" ]]; then
@@ -98,10 +98,10 @@ if [[ -n "$vpn_if" ]]; then
 pass out quick on en0 inet proto tcp from any to ${HPC4_IP} flags any keep state
 pass out quick on en0 inet proto icmp from any to ${HPC4_IP} keep state
 EOF
-    else  # ivanti
+    else  # hkust-tunnel
         sudo pfctl -a "$PF_ANCHOR" -f - <<EOF
-pass out quick on ${IVANTI_IF} inet from any to ${HPC4_IP} flags any keep state
-pass in  quick on ${IVANTI_IF} inet from ${HPC4_IP} to any flags any keep state
+pass out quick on ${HKUST_IF} inet from any to ${HPC4_IP} flags any keep state
+pass in  quick on ${HKUST_IF} inet from ${HPC4_IP} to any flags any keep state
 EOF
     fi
     ok "pf anchor ${PF_ANCHOR} を適用"

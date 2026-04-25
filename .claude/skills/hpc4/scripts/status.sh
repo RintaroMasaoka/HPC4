@@ -17,13 +17,13 @@ fi
 # ネットワーク層（生情報）
 en0_gw="$(detect_en0_gw)"
 en0_ip="$(detect_en0_ip)"
-ivanti_if="$(detect_ivanti_iface || true)"
+hkust_if="$(detect_hkust_tunnel_iface || true)"
 hpc4_iface="$(current_hpc4_iface)"
 printf "  - en0 IP / gateway : %s / %s\n" "${en0_ip:-(なし)}" "${en0_gw:-(なし)}"
-if [[ -n "$ivanti_if" ]]; then
-    printf "  - Ivanti VPN       : %s (IP=%s)\n" "$ivanti_if" "$(ifconfig "$ivanti_if" | awk '/inet /{print $2}')"
+if [[ -n "$hkust_if" ]]; then
+    printf "  - HKUST tunnel     : %s (IP=%s)\n" "$hkust_if" "$(ifconfig "$hkust_if" | awk '/inet /{print $2}')"
 else
-    printf "  - Ivanti VPN       : (未接続)\n"
+    printf "  - HKUST tunnel     : (未接続)\n"
 fi
 printf "  - HPC4 ルート       : %s\n" "${hpc4_iface:-(未設定)}"
 
