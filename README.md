@@ -282,7 +282,7 @@ ssh -F .claude/skills/hpc4/ssh_config -l <user> -vvv hpc4   # SSH 詳細ログ
 <details>
 <summary><b>scripts 一覧</b>（直接叩く時の参照）</summary>
 
-通常は Claude に自然言語で頼めばよい。Claude を介さず手で叩きたい時、または Claude が文脈から呼ぶ時の参照:
+通常は Claude に自然言語で頼めばよい。Claude を介さず手で叩きたい時の参照:
 
 | script | 内容 |
 |---|---|
