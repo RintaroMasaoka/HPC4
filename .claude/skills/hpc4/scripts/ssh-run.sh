@@ -1,0 +1,22 @@
+#!/bin/bash
+# HPC4 上で任意のコマンドを実行する。
+#   ./ssh-run.sh "<command>"
+# 内部で net-up.sh を呼ぶので、ルートと pf anchor は自動整備される。
+# 認証は passwordless SSH（要 setup 済）。ControlMaster で 2 回目以降は即レス。
+
+set -u
+source "$(dirname "$0")/common.sh"
+require_user_conf
+
+if [[ $# -lt 1 ]]; then
+    err "Usage: ssh-run.sh \"<command to run on HPC4>\""
+    exit 2
+fi
+
+# ネットワーク層が未整備なら整備（既に届くならスキップ）
+if ! ping_ok 2; then
+    log "経路未整備。net-up.sh を実行"
+    bash "$(dirname "$0")/net-up.sh" || exit $?
+fi
+
+exec ssh "${HPC4_SSH_OPTS[@]}" -o BatchMode=yes hpc4 "$@"

@@ -1,0 +1,5 @@
+# OS
+.DS_Store
+
+# /hpc4 skill — per-user SSH username / account (individual, not shared)
+.claude/skills/hpc4/user.conf.local
