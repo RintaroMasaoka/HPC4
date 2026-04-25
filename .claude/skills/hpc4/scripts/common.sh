@@ -68,11 +68,13 @@ ping_ok() {
 }
 
 # TCP 22 まで届くか（ICMP が塞がれる環境のバックアップ判定）
+# 第 1 引数：timeout 秒（既定 5）。短時間判定したいときは小さい値を渡す。
 tcp22_ok() {
+    local t="${1:-5}"
     # /dev/tcp は bash 組み込み、外部コマンド不要。タイムアウトのため & + kill で囲む
     ( exec 3<>/dev/tcp/"$HPC4_IP"/22 ) >/dev/null 2>&1 &
     local pid=$!
-    ( sleep 5; kill "$pid" 2>/dev/null ) &
+    ( sleep "$t"; kill "$pid" 2>/dev/null ) &
     local killer=$!
     wait "$pid" 2>/dev/null
     local rc=$?
@@ -100,6 +102,110 @@ fullvpn_default_route() {
     fi
     echo "$iface"
     return 0
+}
+
+# en0 自身の IPv4 アドレス（空文字なら未割当）
+detect_en0_ip() {
+    ifconfig en0 2>/dev/null | awk '/inet /{print $2; exit}'
+}
+
+# 与えた IP が HPC4 と同じ /16 にあるか。
+# HPC4 = 143.89.184.3 なので 143.89/16。
+# 同 /16 なら NAT もファイアウォール越えもなく HPC4 へ直結できる、というのが本質。
+# （143.89/16 は実態として HKUST の公式割当だが、判定の根拠は所属ではなく
+# 「HPC4 に到達できるか」という reachability。）
+is_in_hpc4_subnet() {
+    [[ "${1:-}" =~ ^143\.89\. ]]
+}
+
+# ネットワーク状態を **HPC4 への到達性** という観点で分類し 1 行 verdict を返す。
+# interface 状態（IP / utun / default route）のみから 0 秒で結論を出す。probe しない。
+#
+# 前提：HKUST の end-user ネット（eduroam / 有線 / Ivanti）は 143.89/16 を直接配布する。
+# よって en0 が 143.89/16 でなく Ivanti utun も無い場合 = HKUST 外 = HPC4 不通、と確定できる。
+#
+# 出力フォーマット: <code>:<kind>[:<detail>]
+#   ok:lan-reach:en0_ip=143.89.x.x          en0 が HPC4 と同 /16。LAN 直結
+#   ok:vpn-tunnel:iface=utun9               Ivanti split-tunnel utun に 143.89.* IP
+#   ng:fullvpn-hijack:iface=utunX           HKUST 到達手段はあるがフル VPN が default を奪取
+#                                           （en0 が HKUST 圏内 or Ivanti が立っている時のみ）
+#   ng:no-route                             en0 ゲートウェイも VPN tunnel も無い
+#   ng:no-reach:en0_ip=172.16.x.x           en0 はあるが HKUST 外 + VPN 未接続
+#                                           （pf anchor では救えない。要 Ivanti 起動 or 学内切替）
+#
+# 戻り値：ok なら 0、ng なら 1
+#
+# 設計上の要点：fullvpn-hijack 判定は **HKUST に届く下回り（en0 が 143.89/16
+# にいる、または Ivanti utun が立っている）が既にある場合のみ** 出す。下回りが
+# 無い時にこの verdict を出すと「`/hpc4 up` で pf anchor を入れれば直る」と
+# 誤誘導になる（pf anchor は経路の代わりにはならない）。
+classify_network() {
+    local en0_gw en0_ip ivanti_if fullvpn_if
+    en0_gw="$(detect_en0_gw)"
+    en0_ip="$(detect_en0_ip)"
+    ivanti_if="$(detect_ivanti_iface || true)"
+    fullvpn_if="$(fullvpn_default_route || true)"
+
+    # 1. en0 が HPC4 と同 /16 → LAN 直結が下回り。フル VPN 共存なら pf anchor 要
+    if [[ -n "$en0_ip" ]] && is_in_hpc4_subnet "$en0_ip"; then
+        if [[ -n "$fullvpn_if" ]]; then
+            echo "ng:fullvpn-hijack:iface=${fullvpn_if}"
+            return 1
+        fi
+        echo "ok:lan-reach:en0_ip=${en0_ip}"
+        return 0
+    fi
+    # 2. Ivanti split-tunnel が下回り。フル VPN 共存なら pf anchor 要
+    if [[ -n "$ivanti_if" ]]; then
+        if [[ -n "$fullvpn_if" ]]; then
+            echo "ng:fullvpn-hijack:iface=${fullvpn_if}"
+            return 1
+        fi
+        echo "ok:vpn-tunnel:iface=${ivanti_if}"
+        return 0
+    fi
+    # 3. en0 ゲートウェイも Ivanti も無い → そもそもネット未接続
+    if [[ -z "$en0_gw" ]]; then
+        echo "ng:no-route"
+        return 1
+    fi
+    # 4. en0 はあるが HKUST 圏外 + Ivanti 無し → HPC4 不通で確定
+    #    （フル VPN の有無は無関係。pf anchor では HKUST へ届く経路は作れない）
+    echo "ng:no-reach:en0_ip=${en0_ip:-?}"
+    return 1
+}
+
+# classify_network の verdict 文字列を人間向けの 1 行診断に整形して出力。
+# ng の場合は具体的な救済アクションも文末に含める。
+render_network_verdict() {
+    local verdict="$1"
+    local rest="${verdict#*:}"
+    local kind="${rest%%:*}"
+    local detail=""
+    if [[ "$rest" == *:* ]]; then
+        detail="${rest#*:}"
+    fi
+
+    case "$kind" in
+        lan-reach)
+            printf "  [ok]   HPC4 到達性: 同 LAN 直結 (%s)\n" "$detail"
+            ;;
+        vpn-tunnel)
+            printf "  [ok]   HPC4 到達性: split-tunnel VPN 経由 (%s)\n" "$detail"
+            ;;
+        fullvpn-hijack)
+            printf "  [ng]   HPC4 到達性: default route が他 VPN (%s) に奪取 → '/hpc4 up' で pf anchor 例外を適用してください\n" "$detail"
+            ;;
+        no-reach)
+            printf "  [ng]   HPC4 到達性: 不通 (%s) → Ivanti Secure Access を起動するか eduroam/HKUST 有線に接続してください\n" "$detail"
+            ;;
+        no-route)
+            printf "  [ng]   HPC4 到達性: 経路候補なし → eduroam / HKUST 有線 / Ivanti のいずれかに接続してください\n"
+            ;;
+        *)
+            printf "  [?]    HPC4 到達性: 分類不能 (%s)\n" "$verdict"
+            ;;
+    esac
 }
 
 # --- SSH ラッパ用ヘルパ -----------------------------------------------------
