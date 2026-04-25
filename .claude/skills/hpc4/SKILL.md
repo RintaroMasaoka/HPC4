@@ -8,6 +8,10 @@ user-invocable: true
 
 HKUST HPC4 (`hpc4.ust.hk`) クラスタへのアクセスを、ネットワーク経路（オンキャンパス直結 / HKUST SSL VPN / キルスイッチ型フル VPN）の面倒ごと込みで自動化する。VPN の種類・有無は自動判定するため事前設定は不要。
 
+## 背景
+
+Claude (Anthropic API) は香港をサービス対象外としており、一方 HPC4 は HKUST のネットワーク（143.89/16 IP 帯 — オンキャンパスの eduroam / 有線、または HKUST SSL VPN 経由）からしか到達できない。**Claude を使うには香港外を経由する必要があり、HPC4 を使うには HKUST 圏内に居る必要がある** というジレンマを、**Claude 用の通信と HPC4 用の通信を同じ Mac 上で同居させる**ことで解消するのがこの skill の存在意義。具体的な同居の組み合わせは環境ごとに異なり、後述の `classify_network` がそれを自動判定する。
+
 ## このスキルの位置付け
 
 - **Claude が文脈から判断して `.claude/skills/hpc4/scripts/` 配下の bash script を Bash ツールで直接呼ぶ**のが基本。ユーザが `/hpc4` で対話的に呼ぶことも可だが、それは副経路
