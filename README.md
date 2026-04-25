@@ -238,7 +238,7 @@ skill は環境を見て、必要最小限の介入だけ行う:
 
 ```
 .claude/skills/hpc4/
-├── SKILL.md              LLM 向け instruction（本 skill の振る舞い定義）
+├── SKILL.md              Claude 向け instruction（本 skill の振る舞い定義）
 ├── README.md             本ファイル（人間向けガイド）
 ├── ssh_config            HPC4 専用 SSH 設定（HostName を IP 直指定）
 ├── user.conf.local       個人設定（gitignored、setup で生成される）
@@ -282,7 +282,7 @@ ssh -F .claude/skills/hpc4/ssh_config -l <user> -vvv hpc4   # SSH 詳細ログ
 <details>
 <summary><b>scripts 一覧</b>（直接叩く時の参照）</summary>
 
-通常は Claude に自然言語で頼めばよい。Claude を介さず手で叩きたい時、または LLM が文脈から呼ぶ時の参照:
+通常は Claude に自然言語で頼めばよい。Claude を介さず手で叩きたい時、または Claude が文脈から呼ぶ時の参照:
 
 | script | 内容 |
 |---|---|
