@@ -1,7 +1,7 @@
 #!/bin/bash
 # user.conf.local を機械的に書き出す。
 #   ./write-user-conf.sh <username> [account] [partition] [identity_file]
-# 既存ファイルは上書きされるので注意。通常は Claude が /hpc4 setup フロー内で呼ぶ。
+# 既存ファイルは上書きされるので注意。通常は Claude が setup フロー内で呼ぶ。
 
 set -u
 source "$(dirname "$0")/common.sh"
@@ -17,7 +17,7 @@ if [[ -z "$username" ]]; then
 fi
 
 cat > "$USER_CONF" <<EOF
-# HPC4 個人設定。/hpc4 setup により自動生成。手で書き換えてもよい。
+# HPC4 個人設定。setup フローで自動生成。手で書き換えてもよい。
 # このファイルは .gitignore 済み（リポジトリには含まれない）。
 
 HPC4_USER="${username}"
