@@ -2,6 +2,40 @@
 
 HKUST HPC4 クラスタへの SSH / コマンド実行 / ファイル転送を、ネットワーク経路の面倒ごと込みで自動化する Claude Code 用 skill。Mac (オンキャンパス / オフキャンパス + HKUST SSL VPN / NordVPN 等のフル VPN 併用) のどの状態でも同じ呼び方で繋がる。
 
+## インストール
+
+skill 本体は `hpc4/` フォルダひとつ。これを Claude Code が読む場所に置けばよい。スコープは 2 択:
+
+- **ユーザ全体**: `~/.claude/skills/hpc4/` — どのプロジェクトでも `/hpc4` が使える
+- **プロジェクト限定**: `<プロジェクト>/.claude/skills/hpc4/` — そのプロジェクト内だけ
+
+配置方法は 2 通り。
+
+### A. ZIP でダウンロード
+
+1. リポジトリ右上の緑の **Code** ボタン → **Download ZIP**
+2. ZIP を解凍（自動解凍されていればスキップ）
+3. 展開された `HPC4-main/.claude/skills/hpc4/` フォルダを、上記のいずれかの場所にコピー or 移動
+
+ターミナル派でユーザ全体に置く場合のコマンド例（`HPC4-main` が `~/Downloads` に展開された想定）:
+```bash
+mkdir -p ~/.claude/skills
+mv ~/Downloads/HPC4-main/.claude/skills/hpc4 ~/.claude/skills/
+```
+
+> `~/.claude/` は Finder 上は隠しフォルダ。Finder で操作する場合は `Cmd+Shift+.` で表示を切り替える。
+
+### B. git clone
+
+任意の場所に clone して、配置先に symlink を張る（ユーザ全体に入れる例）:
+```bash
+git clone https://github.com/RintaroMasaoka/HPC4.git ~/src/HPC4
+mkdir -p ~/.claude/skills
+ln -s ~/src/HPC4/.claude/skills/hpc4 ~/.claude/skills/hpc4
+```
+
+---
+
 ## Quick start（細かいことを知らずに使いたい人向け）
 
 **チャットに `/hpc4` と入れるだけ。** 未セットアップなら setup が起動して必要事項を聞いてくれる。セットアップ済みなら「何をしたいか」を聞いてくるので、自然な日本語/英語で答えればよい（例: 「自分の queue 見て」「この job を投入して」）。
