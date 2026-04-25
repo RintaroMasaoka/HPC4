@@ -1,0 +1,20 @@
+# HPC4 専用 SSH 設定（プロジェクトローカル、全メンバー共通）。
+# 呼び出し側は `ssh -F .claude/skills/hpc4/ssh_config -l <username> hpc4 ...` のように使う。
+# ~/.ssh/config は変更せず、このリポジトリ外に副作用を残さない。
+
+Host hpc4 hpc4.ust.hk
+    # HostName は IP を直指定。macOS の ssh は getaddrinfo が /etc/resolv.conf を
+    # 読むので、Ivanti / フル VPN 併用時に ust.hk ドメインが引けず "Could not resolve"
+    # で死ぬ事故を避けるため。IP 自体は net-up.sh / common.sh の HPC4_IP と一致。
+    HostName 143.89.184.3
+    HostKeyAlias hpc4.ust.hk
+    # User は scripts が -l で指定する（各人の ITSO アカウント名）
+    # ControlMaster: 初回認証（password+2FA）後、12h は同じマスター接続を使い回す
+    ControlMaster auto
+    ControlPath /tmp/hpc4-cm-%r@%h-%p
+    ControlPersist 12h
+    # NAT / ファイアウォール越しのアイドル切断対策
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+    # 公開鍵認証を先に試し、未登録なら keyboard-interactive (password+2FA) に fallback
+    PreferredAuthentications publickey,keyboard-interactive,password
