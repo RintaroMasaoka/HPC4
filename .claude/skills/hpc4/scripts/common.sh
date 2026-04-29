@@ -61,6 +61,16 @@ iface_has_hkust_ip() {
     ifconfig "$1" 2>/dev/null | awk '/inet 143\.89\./{found=1} END{exit !found}'
 }
 
+# 全 IF を走査して 143.89/16 IPv4 を持つ最初の IF 名を返す（無ければ空文字）。
+# routing table と独立に「この Mac には HKUST 圏に届く能力があるか」を判定する。
+# stale な host pin が route get の結果を歪めても、これは騙されない。
+find_hkust_iface() {
+    ifconfig 2>/dev/null | awk '
+        /^[a-z]/ { iface=$1; sub(":", "", iface) }
+        /inet 143\.89\./ { print iface; exit }
+    '
+}
+
 # 既存の HPC4 host route が指す IF（無ければ空）
 current_hpc4_iface() {
     netstat -rn 2>/dev/null | awk -v ip="$HPC4_IP" '$1==ip {print $NF; exit}'
