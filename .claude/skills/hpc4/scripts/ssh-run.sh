@@ -14,7 +14,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 # ネットワーク層が未整備なら整備（既に届くならスキップ）
-if ! ping_ok 2; then
+# ICMP は eduroam でブロックされる場合があるため TCP 22 で到達確認する
+if ! tcp22_ok 3; then
     log "経路未整備。net-up.sh を実行"
     bash "$(dirname "$0")/net-up.sh" || exit $?
 fi
