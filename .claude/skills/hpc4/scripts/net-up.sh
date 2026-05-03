@@ -19,19 +19,29 @@
 set -u
 source "$(dirname "$0")/common.sh"
 
-# --- (1) HKUST 圏内能力の有無を ifconfig だけで判定 ------------------------
-# routing table とは独立に「この Mac は 143.89/16 IP を持っているか」を見る。
-# stale な host pin が route get の判定を歪めても、ここは騙されない。
+# --- (0) TCP fast-path：TCP 22 が既に通れば routing は全て正常 ---------------
+# eduroam NAT (10.79/16) + NordVPN 同居など、IF 判定では捕捉しにくい構成でも
+# 実際に届いているなら診断をスキップして即 OK を返す。
+if tcp22_ok 3; then
+    ok "TCP 22 到達 OK（routing 判定スキップ）"
+    exit 0
+fi
+
+# --- (1) HKUST 圏内能力の有無を判定 ----------------------------------------
+# (a) 143.89/16 IP を直接持つ IF
+# (b) eduroam NAT (10.79/16) 経由で 143.89.x への route が既存
+# (c) route get が physical IF → private IP の場合（NordVPN なし）
+# (d) 10.79/16 IP を持つ物理 IF（HKUST eduroam NAT の特徴）
 hkust_iface="$(find_hkust_iface)"
 
 if [[ -z "$hkust_iface" ]]; then
-    err "あなたの Mac には 143.89/16 (HKUST) IPv4 を持つ IF が一つもありません。"
-    err "  → HKUST キャンパス内の eduroam または HKUST 有線（オンキャンパスの場合）"
+    err "あなたの Mac には HKUST 到達能力を持つ IF が一つもありません。"
+    err "  → HKUST キャンパス内の eduroam (10.79/16 NAT) または HKUST 有線（オンキャンパスの場合）"
     err "  → Ivanti Secure Access (HKUST SSL VPN) を起動（オフキャンパスの場合）"
     err ""
-    err "備考：eduroam は federated roaming service なので HKUST 以外（DT Hub 等の HKSTP"
-    err "      施設、他大学、空港）でも同じ SSID で繋がりますが、HKUST IP は降ってこず"
-    err "      HPC4 には届きません。詳細は .claude/skills/hpc4/policy.md。"
+    err "備考：eduroam は federated なので HKUST 以外（DT Hub 等の HKSTP 施設、他大学、空港）でも"
+    err "      同じ SSID で繋がりますが、HKUST 構成員向け eduroam でないと HPC4 に届きません。"
+    err "      詳細は .claude/skills/hpc4/policy.md。"
     exit 1
 fi
 
@@ -40,7 +50,7 @@ fi
 # 害悪な存在。delete を user に依頼する。
 existing_pin="$(current_hpc4_iface)"
 
-if [[ -n "$existing_pin" ]] && ! iface_has_hkust_ip "$existing_pin"; then
+if [[ -n "$existing_pin" ]] && ! iface_is_hkust_capable "$existing_pin"; then
     err "前回 set した HPC4 host route が ${existing_pin} (HKUST 圏外) を指したまま残っています。"
     err "longest-prefix-match でこの stale pin が natural route を上書きしてしまうので、削除が必要です。"
     err ""
@@ -58,7 +68,7 @@ fi
 resolve="$(hpc4_route_resolve)"
 egress="$(printf '%s' "$resolve" | awk '{print $1}')"
 
-if [[ -z "$egress" ]] || ! iface_has_hkust_ip "$egress"; then
+if [[ -z "$egress" ]] || ! iface_is_hkust_capable "$egress"; then
     err "HKUST 圏内 IF (${hkust_iface}) は存在しますが、kernel は HPC4 を別 IF (${egress:-なし}) に流しています。"
     err "host pin で ${hkust_iface} に固定する必要があります。別ターミナルで以下を 1 行実行してください："
     err ""
