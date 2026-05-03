@@ -14,10 +14,17 @@ if [[ $# -lt 1 ]]; then
 fi
 
 # ネットワーク層が未整備なら整備（既に届くならスキップ）
-# ICMP は eduroam でブロックされる場合があるため TCP 22 で到達確認する
+# ICMP は eduroam でブロックされる場合があるため TCP 22 で到達確認する。
+# route socket が sandbox で制限されている場合は TCP probe が false negative
+# になり得るので、net-up.sh を呼ばず SSH を直接試行する（SSH 自体が成功すれば
+# 実体としては届いている）。
 if ! tcp22_ok 3; then
-    log "経路未整備。net-up.sh を実行"
-    bash "$(dirname "$0")/net-up.sh" || exit $?
+    if route_probe_restricted; then
+        log "route probe 制限を検出。net-up.sh をスキップして SSH を直接試行します"
+    else
+        log "経路未整備。net-up.sh を実行"
+        bash "$(dirname "$0")/net-up.sh" || exit $?
+    fi
 fi
 
 exec ssh "${HPC4_SSH_OPTS[@]}" -o BatchMode=yes hpc4 "$@"

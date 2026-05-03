@@ -15,6 +15,7 @@
 #   1  HKUST 圏内 IF が一つもない（network 状態を直す必要あり）
 #   2  L3 経路は OK だが TCP 22 不通（L4 遮断）
 #   3  user による sudo 操作が必要（stale pin 削除 or pin 追加）
+#   4  route socket が sandbox / permission で制限されており判定不能
 
 set -u
 source "$(dirname "$0")/common.sh"
@@ -25,6 +26,21 @@ source "$(dirname "$0")/common.sh"
 if tcp22_ok 3; then
     ok "TCP 22 到達 OK（routing 判定スキップ）"
     exit 0
+fi
+
+# --- (0.5) sandbox / permission 制限：route socket が塞がれているか ----------
+# Codex sandbox や非 escalated 環境では route get / ping / 一部 TCP probe が
+# 軒並み false negative になり、実際は届いているのに「経路欠落」と誤診断される。
+# この状態で sudo route add を促すと、(a) 操作自体が permission 拒否で失敗し、
+# (b) 実際には不要な route 追加を user に促してしまう。判定不能で即時終了する。
+if route_probe_restricted; then
+    err "route socket が制限されています（Codex sandbox / 非 escalated 環境の特徴）。"
+    err "この状態では route get / ping / 一部 TCP probe が実体と無関係に false negative"
+    err "を返すため、経路診断ができません。実際には HPC4 に届いている可能性があります。"
+    err ""
+    err "  → 別ターミナル（permission 制限のないシェル）で同じ script を再実行してください。"
+    err "    判定不能のまま sudo route add を勧めることはしません。"
+    exit 4
 fi
 
 # --- (1) HKUST 圏内能力の有無を判定 ----------------------------------------
