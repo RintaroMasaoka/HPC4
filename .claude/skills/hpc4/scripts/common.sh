@@ -61,13 +61,55 @@ iface_has_hkust_ip() {
     ifconfig "$1" 2>/dev/null | awk '/inet 143\.89\./{found=1} END{exit !found}'
 }
 
-# 全 IF を走査して 143.89/16 IPv4 を持つ最初の IF 名を返す（無ければ空文字）。
+# 与えた IF が HKUST 到達能力を持つか。
+# (1) 143.89/16 IP を直接保持（HKUST VPN / 有線）
+# (2) eduroam NAT: private IP を持ち、routing table に 143.89.x → この IF の host route が存在
+# (3) HKUST eduroam 特有の 10.79/16 IP を保持
+iface_is_hkust_capable() {
+    [[ -n "${1:-}" ]] || return 1
+    ifconfig "$1" 2>/dev/null | awk '/inet 143\.89\./{found=1} END{exit !found}' && return 0
+    ifconfig "$1" 2>/dev/null | grep -qE 'inet (10\.|192\.168\.)' || return 1
+    netstat -rn 2>/dev/null | awk -v iface="$1" \
+        '$NF==iface && /^143\.89\./{found=1} END{exit !found}' && return 0
+    ifconfig "$1" 2>/dev/null | grep -q 'inet 10\.79\.'
+}
+
+# 全 IF を走査して HKUST 到達能力を持つ最初の IF 名を返す（無ければ空文字）。
 # routing table と独立に「この Mac には HKUST 圏に届く能力があるか」を判定する。
 # stale な host pin が route get の結果を歪めても、これは騙されない。
+#
+# 判定順:
+#   (1) 143.89/16 IP を直接持つ IF（HKUST VPN / 有線）
+#   (2) routing table に「143.89.x → private GW 経由で物理 IF」が存在（eduroam NAT + 既存 host route）
+#   (3) route get が physical IF を返し、その IF が private IP を持つ（NordVPN が default を奪っていない場合）
+#   (4) HKUST eduroam 特有の 10.79/16 IP を持つ物理 IF（最終手段）
 find_hkust_iface() {
-    ifconfig 2>/dev/null | awk '
+    local iface
+    iface=$(ifconfig 2>/dev/null | awk '
         /^[a-z]/ { iface=$1; sub(":", "", iface) }
         /inet 143\.89\./ { print iface; exit }
+    ')
+    [[ -n "$iface" ]] && { printf '%s' "$iface"; return 0; }
+
+    iface=$(netstat -rn 2>/dev/null | awk '
+        /^143\.89\./ &&
+        ($2 ~ /^10\./ || $2 ~ /^192\.168\./) &&
+        $NF ~ /^en/ { print $NF; exit }
+    ')
+    [[ -n "$iface" ]] && { printf '%s' "$iface"; return 0; }
+
+    local route_iface
+    route_iface=$(route get "$HPC4_IP" 2>/dev/null | awk '/interface:/{print $2}')
+    if [[ -n "$route_iface" ]] && [[ "$route_iface" =~ ^en ]]; then
+        if ifconfig "$route_iface" 2>/dev/null | grep -qE 'inet (10\.|192\.168\.)'; then
+            printf '%s' "$route_iface"
+            return 0
+        fi
+    fi
+
+    ifconfig 2>/dev/null | awk '
+        /^en/ { iface=$1; sub(":", "", iface) }
+        /inet 10\.79\./ { print iface; exit }
     '
 }
 
