@@ -11,6 +11,7 @@ set -u
 # --- グループ共通の固定パラメータ -------------------------------------------
 HPC4_HOST="hpc4.ust.hk"
 HPC4_IP="143.89.184.3"
+PF_ANCHOR="main/hpc4"
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SSH_CONFIG="${SKILL_DIR}/ssh_config"
@@ -38,6 +39,27 @@ log()  { printf "[hpc4] %s\n" "$*"; }
 ok()   { printf "[hpc4][ok] %s\n" "$*"; }
 warn() { printf "[hpc4][warn] %s\n" "$*" >&2; }
 err()  { printf "[hpc4][err] %s\n" "$*" >&2; }
+
+# sudo が必要な操作を安全に実行する。
+#
+# 既定では AI 実行から sudo を試さない。sudo password / Touch ID は
+# user の Terminal 専用 helper (net-up-local.sh) だけが扱う。
+sudo_cmd() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+        return $?
+    fi
+
+    if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && -t 0 && -t 1 ]]; then
+        sudo "$@"
+        return $?
+    fi
+
+    err "sudo が必要ですが、AI 実行から sudo prompt は扱いません。"
+    err "別ターミナルで次を一度実行してから再試行してください:"
+    err "  bash \"${HPC4_LOCAL_HELPER:-${SKILL_DIR}/scripts/net-up-local.sh}\""
+    return 20
+}
 
 # --- HPC4 への到達性判定 ---------------------------------------------------
 
@@ -116,6 +138,65 @@ find_hkust_iface() {
 # 既存の HPC4 host route が指す IF（無ければ空）
 current_hpc4_iface() {
     netstat -rn 2>/dev/null | awk -v ip="$HPC4_IP" '$1==ip {print $NF; exit}'
+}
+
+# 指定 IF の default gateway（DHCP / VPN 由来）。無ければ空。
+# netstat の per-iface default 行を最優先、無ければ ipconfig の DHCP option を見る。
+default_gateway_for_iface() {
+    [[ -n "${1:-}" ]] || return 1
+    local gw
+    gw="$(netstat -rn -f inet 2>/dev/null | awk -v iface="$1" '$1=="default" && $NF==iface {print $2; exit}')"
+    if [[ -z "$gw" ]]; then
+        gw="$(ipconfig getoption "$1" router 2>/dev/null)"
+    fi
+    [[ -n "$gw" ]] && printf '%s' "$gw"
+}
+
+hpc4_pin_route() {
+    local iface="${1:-}"
+    [[ -n "$iface" ]] || return 1
+    if ifconfig "$iface" 2>/dev/null | grep -q 'inet 143\.89\.'; then
+        sudo_cmd route -n add -host "$HPC4_IP" -interface "$iface"
+        return $?
+    fi
+    local gw
+    gw="$(default_gateway_for_iface "$iface")"
+    [[ -n "$gw" ]] || return 1
+    sudo_cmd route -n add -host "$HPC4_IP" -gateway "$gw"
+}
+
+# kill-switch 系フル VPN（NordVPN / SurfShark / ExpressVPN / Proton / Mullvad
+# / WireGuard / OpenVPN / Cisco AnyConnect 等）が default route を奪っているか。
+# 該当なら IF 名を出力。判定基準は「default route の出口 IF が POINTOPOINT で、
+# かつそれが HKUST tunnel (143.89/16 IP を持つ) ではない」。
+# このタイプは pf で en0 出力を塞ぐので、HPC4 宛だけ pf anchor で例外許可しないと
+# host route が正しくても L4 で落とされる。
+fullvpn_default_route() {
+    local iface
+    iface="$(netstat -rn -f inet 2>/dev/null | awk '$1=="default" {print $NF; exit}')"
+    [[ -z "$iface" ]] && return 1
+    local flags
+    flags="$(ifconfig "$iface" 2>/dev/null | awk 'NR==1')"
+    [[ "$flags" == *POINTOPOINT* ]] || return 1
+    if ifconfig "$iface" 2>/dev/null | grep -q 'inet 143\.89\.'; then
+        return 1
+    fi
+    printf '%s' "$iface"
+}
+
+hpc4_apply_pf_anchor() {
+    local iface="${1:-}"
+    [[ -n "$iface" ]] || return 1
+    local rules_file
+    rules_file="$(mktemp "${TMPDIR:-/tmp}/hpc4-pf.XXXXXX")" || return 1
+    cat >"$rules_file" <<EOF
+pass out quick on ${iface} inet proto tcp from any to ${HPC4_IP} flags any keep state
+pass out quick on ${iface} inet proto icmp from any to ${HPC4_IP} keep state
+EOF
+    sudo_cmd pfctl -a "$PF_ANCHOR" -f "$rules_file"
+    local rc=$?
+    rm -f "$rules_file"
+    return "$rc"
 }
 
 # TCP 22 が通るか（タイムアウト秒、既定 5）

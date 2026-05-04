@@ -1,97 +1,117 @@
 # hpc4 skill
 
-HKUST HPC4 クラスタへの SSH / コマンド実行 / ファイル転送を、ネットワーク経路の面倒ごと込みで自動化する Claude Code 用 skill。Mac (オンキャンパス / オフキャンパス + HKUST SSL VPN / NordVPN 等のフル VPN 併用) のどの状態でも同じ呼び方で繋がる。
+**English** | [日本語](README.ja.md)
 
-## 背景
+A Claude Code / Codex Desktop skill that automates SSH / command execution / file transfer to the HKUST HPC4 cluster, including all the network-routing fiddly bits. You invoke it the same way regardless of where the Mac is — on-campus, off-campus with the HKUST SSL VPN, or with a full VPN like NordVPN running alongside it.
 
-Claude (Anthropic API) は香港をサービス対象外リージョンとしており、一方 HPC4 (`hpc4.ust.hk`) は HKUST のネットワーク（143.89/16 IP 帯 — オンキャンパスの eduroam / 有線、または HKUST SSL VPN 経由）からしか到達できない。**Claude を使うには香港外を経由する必要があり、HPC4 を使うには HKUST 圏内に居る必要がある** というジレンマを、**Claude 用の通信と HPC4 用の通信を同じ Mac 上で同居させる**ことで解消するのがこの skill の存在意義。具体的な同居の組み合わせは環境ごとに異なり、skill が自動判定して経路を整える。
+## Background
 
-## インストール
+Claude (the Anthropic API) treats Hong Kong as an unsupported region, while HPC4 (`hpc4.ust.hk`) is only reachable from HKUST's network (the 143.89/16 range — on-campus eduroam / wired, or via the HKUST SSL VPN). **To use Claude you have to leave Hong Kong; to use HPC4 you have to be inside HKUST.** The same split-network problem also appears in Codex Desktop when its sandboxed execution sees false negatives. The reason this skill exists is to resolve that dilemma by **letting AI-agent traffic and HPC4 traffic coexist on the same Mac**. The exact combination differs per environment, and the skill figures out the routing automatically.
 
-skill 本体は `hpc4/` フォルダひとつ。これを Claude Code が読む場所に置けばよい。スコープは 2 択:
+## Install
 
-- **ユーザ全体**: `~/.claude/skills/hpc4/` — どのプロジェクトでも `/hpc4` が使える
-- **プロジェクト限定**: `<プロジェクト>/.claude/skills/hpc4/` — そのプロジェクト内だけ
+The repo contains both Claude Code and Codex Desktop skill layouts:
 
-### 1. ZIP を取得
+- Claude Code: `.claude/skills/hpc4/`
+- Codex Desktop: `.codex/skills/hpc4/`
 
-リポジトリ右上の **Code** → **Download ZIP**、解凍（自動解凍ならスキップ）。
+For Claude Code, drop `hpc4/` where Claude looks for skills. Two scopes to choose from:
 
-### 2. 配置（Finder / ターミナル のどちらか）
+- **User-wide**: `~/.claude/skills/hpc4/` — `/hpc4` works in every project
+- **Project-only**: `<project>/.claude/skills/hpc4/` — limited to that project
 
-**Finder**: `Cmd+Shift+.` で隠しフォルダ表示。ZIP 内 `HPC4-main/.claude/skills/hpc4/` を、配置先（ホーム or プロジェクト直下）の `.claude/skills/` にドラッグ & ドロップ。
+For Codex Desktop, keep the project-local `.codex/skills/hpc4/` folder in the repo. Codex discovers it as a project skill.
 
-**ターミナル**: 以下を順に貼る。
+### 1. Get the ZIP
+
+Click **Code** → **Download ZIP** at the top right of the repo, then unzip (skip if your OS auto-unzips).
+
+### 2. Place it (Finder or terminal)
+
+**Finder**: `Cmd+Shift+.` to show hidden folders. For Claude Code, drag `HPC4-main/.claude/skills/hpc4/` from inside the unzipped archive into `.claude/skills/` under your home directory or your project root. For Codex Desktop, use a clone of this repo so `.codex/skills/hpc4/` stays project-local.
+
+**Terminal**: paste these in order.
 
 ```bash
 cd ~
 ```
-> ユーザ全体想定。プロジェクト限定なら cd <プロジェクトのパス>。
-> ターミナルに Finder のフォルダをドラッグ & ドロップすると絶対パスが挿入される。
+> Assumes user-wide. For project-only, `cd <path-to-project>`.
+> Dragging a folder from Finder into the terminal inserts its absolute path.
 
 ```bash
 mkdir -p .claude/skills && mv ~/Downloads/HPC4-main/.claude/skills/hpc4 .claude/skills/
 ```
 
-> ダウンロード先は `~/Downloads` を想定
+> Assumes the download landed in `~/Downloads`.
 
 ---
 
-## 使い方
+## Usage
 
-**チャットに `/hpc4` と入れるだけ。** 未セットアップなら setup が起動して必要事項を聞いてくれる。セットアップ済みなら「何をしたいか」を聞いてくるので、自然な日本語/英語で答えればよい。
+**Just type `/hpc4` in chat.** If not yet set up, the setup flow runs and asks for what it needs. If already set up, it asks what you want to do — answer in plain English (or Japanese).
 
-初回 setup でユーザが手を動かすのは最大 2 アクション:
-1. ITSO ユーザ名を答える（チャットで）
-2. 別ターミナルで `ssh-copy-id` を 1 回実行（password + 2FA を通す）
+First-time setup needs at most two manual actions from you:
+1. Tell Claude your ITSO username (in chat).
+2. Run `ssh-copy-id` once in a separate terminal (clears password + 2FA).
 
-以降の SSH は ControlMaster で 12 時間 cache されるので password 不要。
+After that, ControlMaster caches the SSH session for 12 hours, so no more passwords.
 
-セットアップ済みなら、`/hpc4` を介さずチャットで普通に頼むだけでも Claude が裏側で経路整備・コマンド実行・ファイル転送を進める。例:
+Once set up, you don't even need `/hpc4` — just ask in chat normally and Claude/Codex handles routing, command execution, and file transfer behind the scenes. Examples:
 
-- 「HPC4 で自分の queue を見て」
-- 「このディレクトリを HPC4 の `/scratch/$USER/` 以下に上げて、`sbatch run.sh` で投入して」
-- 「HPC4 のログを取ってきて中身を要約して」
-- 「HPC4 に繋がらなくなった、調べて」
+- "Show me my queue on HPC4."
+- "Upload this directory to `/scratch/$USER/` on HPC4 and submit it with `sbatch run.sh`."
+- "Pull the logs from HPC4 and summarize them."
+- "I can't reach HPC4 anymore — diagnose it."
 
-コマンドを覚える必要はない。
+You don't need to remember any commands.
 
-## 想定環境
+### About sudo
 
-- macOS（Linux/Windows は対応外）
-- HKUST ITSO アカウント
-- HPC4 の利用権限（既定では渡辺グループ `watanabemc`。他 group の場合は setup で account を変更）
-- オフキャンパスから使うなら Ivanti Secure Access（HKUST SSL VPN クライアント、別途インストール）
+Claude/Codex do not accept your macOS password in chat, and they should not wait on an interactive `sudo` prompt. If local route or pf changes are needed, the AI-run script stops and asks you to run the local helper in your own Terminal:
+
+```bash
+bash .claude/skills/hpc4/scripts/net-up-local.sh   # Claude layout
+bash .codex/skills/hpc4/scripts/net-up-local.sh    # Codex layout
+```
+
+After the helper succeeds, return to chat and the agent can re-check status and continue.
+
+## Target environment
+
+- macOS (Linux/Windows are out of scope)
+- An HKUST ITSO account
+- HPC4 access privileges (default Slurm account is `watanabemc` for the Watanabe group; change `account` in setup if you're in a different group)
+- For off-campus use: Ivanti Secure Access (the HKUST SSL VPN client; install separately)
 
 ---
 
-# HKUST HPC4 公式情報リファレンス
+# HKUST HPC4 official-info reference
 
-skill の動作とは独立に、HPC4 を使う上で覚えておきたい運用情報。一次情報は HKUST HPC4 公式ドキュメントが優先される（ここは便宜のための要約）。
+Operational notes for using HPC4 itself, independent of how the skill behaves. The HKUST HPC4 official documentation is the source of truth (this is just a convenience summary).
 
-### アカウント・リソース概要
+### Account / resource overview
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
 | Login host | `hpc4.ust.hk` |
-| Slurm account | `watanabemc`（渡辺 group。他 group は所属に応じて変更） |
+| Slurm account | `watanabemc` (Watanabe group; change per your group) |
 | Partitions | `amd`, `intel` |
 | Home quota | 200 GB / user (`/home/<username>`) |
-| Project quota | 10 TB / group (`/project/watanabemc`、NFS) |
-| Scratch quota | 500 GB / user (`/scratch/<username>`、SSD NFS、60 日 inactive で削除) |
+| Project quota | 10 TB / group (`/project/watanabemc`, NFS) |
+| Scratch quota | 500 GB / user (`/scratch/<username>`, SSD NFS, deleted after 60 days inactive) |
 
-### デフォルト Slurm 資源比率
+### Default Slurm resource ratios
 
-`--cpus-per-task` または `--gpus-per-node` だけ指定すれば、Slurm が以下の比で RAM 等を自動配分する。手動で `--mem` を盛らないのが推奨:
+Specify only `--cpus-per-task` or `--gpus-per-node` — Slurm will allocate RAM etc. proportionally. Manually inflating `--mem` is not recommended:
 
-| Node / Resource | 既定割当比 |
+| Node / Resource | Default ratio |
 |---|---|
 | AMD nodes | 1 CPU : 2.8 GB RAM |
 | Intel nodes | 1 CPU : 3.8 GB RAM |
 | A30 / L20 GPU | 1 GPU : 16 threads (HT off) : 7.5 GB RAM/thread |
 | RTX4090D / RTX5880ADA | 1 GPU : 10 threads (HT off) : 7.5 GB RAM/thread |
 
-### Interactive ジョブの起動例
+### Interactive job examples
 
 ```bash
 # CPU
@@ -104,199 +124,213 @@ srun --account=watanabemc --partition=<partition_name> \
      --gpus-per-node=1 --nodes=1 --time=01:00:00 --pty bash
 ```
 
-### Batch ジョブのテンプレ
+### Batch job template
 
 ```bash
 #!/bin/bash
 #SBATCH --account=watanabemc
 #SBATCH --partition=<partition_name>
 #SBATCH --ntasks=1
-#SBATCH --gpus-per-node=1   # GPU 不要なら削除
+#SBATCH --gpus-per-node=1   # remove if you don't need a GPU
 #SBATCH --time=01:00:00
 
-# module load cuda  など必要に応じて
+# module load cuda  etc., as needed
 # source activate my_env
 
 python your_script.py
 ```
 
-投入: `sbatch job.sh`、状態確認: `squeue -u $USER`。
+Submit with `sbatch job.sh`; check status with `squeue -u $USER`.
 
-### モニタリング・運用コマンド
+### Monitoring / operations commands
 
-| コマンド | 内容 |
+| Command | What it does |
 |---|---|
-| `savail` | 各 partition の空き GPU/CPU/メモリ概観。大規模投入前に確認 |
-| `squota -A watanabemc` | group の storage / GPU / CPU 累積使用量 |
-| `squota` | 個人使用量サマリ |
-| `squeue -u $USER` | 自分の active / queued ジョブ |
-| `sacctmgr show qos <qos_name> format=Name,MaxSubmitPU,MaxJobsPU,MaxWall` | QOS 上限確認 |
+| `savail` | GPU/CPU/memory availability per partition. Check before large submits. |
+| `squota -A watanabemc` | Cumulative storage / GPU / CPU usage for the group. |
+| `squota` | Personal usage summary. |
+| `squeue -u $USER` | Your active / queued jobs. |
+| `sacctmgr show qos <qos_name> format=Name,MaxSubmitPU,MaxJobsPU,MaxWall` | QOS limits. |
 
-### 課金・利用ポリシー
+### Billing / usage policy
 
-- 利用料金は月次。明細は PI に送付される
-- `/project` の quota 超過分は別途課金対象
-- 利用は **HKUST 研究または coursework 限定**
-- 大規模投入前に quota 確認、終了後は temp ファイル除去
-- ジョブは時間制限内に収める
+- Billed monthly; itemized statements go to the PI.
+- `/project` quota overages are billed separately.
+- Use is limited to **HKUST research or coursework only**.
+- Verify quotas before large submits; clean up temp files when done.
+- Stay within your time limits.
 
-### コンテナ・ソフトウェアビルド
+### Containers / software builds
 
-- Singularity / Apptainer サポートあり（公式ドキュメント参照）
-- Spack による独自ソフトウェアスタック構築可能（[Spack Documentation](https://spack.io)）
+- Singularity / Apptainer are supported (see official docs).
+- Spack lets you build your own software stack ([Spack documentation](https://spack.io)).
 
-### サポート連絡先
+### Support contact
 
-- 技術的問題（アカウント / ジョブ / quota）: `hpc4support@ust.hk`
-- 緊急時（service interruption）はメールに job ID（`squeue -u $USER` の出力）と error log を添付
-- 公式: HKUST HPC4 Official Website / HKUST HPC Knowledge Base
+- Technical issues (account / jobs / quota): `hpc4support@ust.hk`
+- For service interruptions, attach the job ID (output of `squeue -u $USER`) and the error log.
+- Official: HKUST HPC4 Official Website / HKUST HPC Knowledge Base.
 
-### より深い運用知識
+### Deeper operational knowledge
 
-HPC4 上で sbatch を回す側の運用知識（QOS 上限を超える投入の throttle dispatcher / tmux で disconnect に耐える / walltime の決め方 / ファイルシステムの使い分け / 接続層の踏みやすい罠）は [SKILL.md](.claude/skills/hpc4/SKILL.md) 後半の「Slurm ジョブ投入の運用知識」節を参照。
+The operational know-how for running sbatch on HPC4 (throttle dispatcher for submitting beyond QOS limits, surviving disconnects with tmux, choosing walltimes, picking the right filesystem, the connection-layer traps) lives in the "Operational knowledge for Slurm job submission" section toward the end of the Claude/Codex skill instructions.
 
 ---
 
-# 詳細を知りたい方へ
+# For the curious
 
-skill の内部実装、安全性、共有時の留意点。通常使う分には開かなくてよい。
+Internals, safety, sharing notes. Skip this if you just want to use the skill.
 
 <details>
-<summary><b>このスクリプトが macOS に対して何をするか</b>（透明性 / 安全性）</summary>
+<summary><b>What this skill does to your macOS</b> (transparency / safety)</summary>
 
-### 触る範囲
+### Touched
 
-| 項目 | 変更内容 |
+| Item | Change |
 |---|---|
-| route table | host route を 1 行追加（`143.89.184.3` のみ） |
-| `/tmp/hpc4-cm-*` | SSH ControlMaster ソケット |
+| route table | One host route added (`143.89.184.3` only) |
+| pf ruleset | Narrow `com.apple/hpc4` or skill-local anchor rules for HPC4 only when a full-VPN kill switch requires it |
+| `/tmp/hpc4-cm-*` | SSH ControlMaster sockets |
 
-### 触らない範囲
+### Not touched
 
-- default route や Claude 経路（`/Library` 配下の VPN 設定、他の host route 等）
-- `/etc/hosts`、`/etc/resolv.conf`、`~/.ssh/config`（プロジェクト内 `ssh_config` のみ使用）
-- launchd、kernel extension、システム設定 GUI
-- 既存の VPN client の設定や接続
+- Default route or Claude's path (VPN configs under `/Library`, other host routes, etc.)
+- `/etc/hosts`, `/etc/resolv.conf`, `~/.ssh/config` (uses the in-project `ssh_config` only)
+- launchd, kernel extensions, System Settings GUI
+- Any existing VPN client's settings or connections
 
-### 永続性
+### Persistence
 
-**全部 in-memory。Mac を再起動すれば自動で全消去される**:
+**All in-memory. A reboot wipes everything automatically:**
 
-- macOS の host route は永続化機構なし
-- ControlMaster ソケットは `/tmp` 配下
+- macOS host routes have no persistence mechanism.
+- ControlMaster sockets live under `/tmp`.
 
-意図的に teardown したい場合は Claude に「経路を取り外して」と頼む。冪等に host route を削除し、ControlMaster を close する。
+To tear down explicitly, ask Claude to "tear down the route". It idempotently deletes the host route and closes the ControlMaster.
 
-### 特権操作
+### Privileged operations
 
-`route` がカーネル routing table を触るため sudo が要る。`net-up.sh` 中の sudo 呼び出しは:
+`route` and `pfctl` modify local networking state, so they need sudo. AI-run scripts do not prompt for sudo; the user-terminal helper does. The privileged operations are limited to:
 
-- `sudo route delete -host 143.89.184.3` 1 回（既存 pin の掃除）
-- `sudo route add -host 143.89.184.3 ...` 1 回
+- deleting a stale host route for `143.89.184.3`
+- adding a host route for `143.89.184.3`
+- applying or flushing a narrow pf anchor for `143.89.184.3`
 
-外部入力を sudo コマンドに混ぜていないので shell injection の余地はない。Touch ID 設定があれば指紋で通る。
-
-</details>
-
-<details>
-<summary><b>共有時の注意点</b>（規約・競合・個人情報）</summary>
-
-### 規約・ポリシー
-
-- **個人所有 Mac**: ユーザ権限の host route 1 行だけなので問題なし
-- **企業支給 Mac**: corporate MDM で routing table 変更を監査している場合は事前に IT に確認
-- **商用 VPN との関係**: HPC4 (143.89.184.3) を VPN client 側で split tunnel に追加するのと同じことを、host route 1 行で実現している。provider の規約解釈は保証外
-
-### 競合
-
-- **VPN client の kill-switch / NEPacketTunnelProvider が L4 で 143.89.184.3 行きを遮断する場合**: kernel routing は正しいが TCP 22 が通らない。`net-up.sh` はこのケースを検出して、VPN client GUI で 143.89.184.3 を例外設定する手順を terminal 直読の日本語で出して exit する
-- **Little Snitch / LuLu**: app 単位で許可されていれば host route で抜けられる。塞がれている場合は別途許可が要る
-- **他の VPN client との共存**: skill は VPN 製品を判別しない。HKUST 圏に届く IF（143.89/16 IP を持つ IF）が 1 つでも上がっていれば、host route で HPC4 行きだけそこに固定する。下回りが HKUST 圏外なら Ivanti / 学内ネットを起動するよう案内する
-
-### 個人情報
-
-- ITSO ユーザ名は `user.conf.local` に保存され、`.gitignore` 済（リポジトリには入らない）
-- SSH 秘密鍵は `~/.ssh/` 配下のまま。skill 側に複製しない
-- **頒布前**: 自分の `user.conf.local` を削除してから配布する（`git archive` や clean clone なら自動で除外される）
+No external input is interpolated into the sudo commands, so there's no shell-injection surface. With Touch ID enabled, the fingerprint suffices.
 
 </details>
 
 <details>
-<summary><b>ネットワーク経路の自動判定</b></summary>
+<summary><b>Sharing notes</b> (policy / conflicts / personal info)</summary>
 
-skill は VPN 製品を判別せず、kernel に「HPC4 (143.89.184.3) をどの IF に出すか」と聞いて、その IF が 143.89/16 IP を持っているかだけで判定する:
+### Policy
 
-- HKUST 圏に届く IF が 1 つでもある（en0 が 143.89/16 直結、または Ivanti utun 上に 143.89.\* IP）→ host route で HPC4 行きをその IF に pin。後で他 VPN が default を変えても longest-prefix-match で勝つので HPC4 だけは抜け続ける
-- HKUST 圏に届く IF が無い（NordVPN 等が default を握っているだけ、または完全オフキャンパス）→ pin しても無駄なので即終了し、user に「Ivanti 起動 / 学内ネット切替」を案内
-- 経路は OK だが TCP 22 が通らない（VPN client の kill-switch / NEPacketTunnelProvider 等で L4 遮断）→ user の VPN GUI で 143.89.184.3 を例外設定する手順を terminal 直読の日本語で出す
+- **Personal Mac**: just one user-level host route — fine.
+- **Corporate-issued Mac**: if your IT department audits routing-table changes via MDM, check with them first.
+- **Relationship to commercial VPNs**: this is functionally identical to adding 143.89.184.3 to the VPN client's split-tunnel list, just done via a host route. How the provider's TOS interprets that is on you.
 
-各層の動作と踏みやすい罠は [SKILL.md](.claude/skills/hpc4/SKILL.md) の「ネットワーク層の仕組み」「接続層の踏みやすい罠」節を参照。
+### Conflicts
+
+- **VPN client kill-switch / NEPacketTunnelProvider blocking 143.89.184.3 at L4**: kernel routing is correct but TCP 22 doesn't go through. `net-up.sh` detects this and prints terminal-readable instructions for whitelisting 143.89.184.3 in the VPN client GUI before exiting.
+- **Little Snitch / LuLu**: as long as the relevant app is allowed, the host route punches through. If they're blocking, allow them separately.
+- **Other VPN clients running concurrently**: the skill does not identify VPN products. If any interface holds a 143.89/16 IP, the skill pins HPC4 traffic to that interface; otherwise it tells the user to start Ivanti or get on the campus network.
+
+### Personal info
+
+- Your ITSO username goes into `user.conf.local`, which is gitignored (not in the repo).
+- Your SSH private key stays in `~/.ssh/`; the skill never copies it.
+- **Before redistributing**: delete your own `user.conf.local` first (`git archive` and clean clones already exclude it).
 
 </details>
 
 <details>
-<summary><b>ファイル構成</b></summary>
+<summary><b>Network-route auto-detection</b></summary>
+
+The skill does not identify VPN products. It asks the kernel "which interface egresses HPC4 (143.89.184.3)?" and decides solely based on whether that interface holds a 143.89/16 IP:
+
+- At least one interface reaches HKUST (en0 directly on 143.89/16, or Ivanti utun with a 143.89.\* IP) → pin a host route for HPC4 to that interface. Even if another VPN later changes the default, longest-prefix-match keeps HPC4 routed correctly.
+- No interface reaches HKUST (NordVPN owning the default, or fully off-campus) → pinning would be useless; bail and tell the user to start Ivanti / switch to a campus network.
+- Routing OK but TCP 22 fails (VPN client kill-switch / NEPacketTunnelProvider blocking at L4) → print terminal-readable steps for whitelisting 143.89.184.3 in the VPN client GUI.
+
+For per-layer behavior and the gotchas, see the "How the network layer works" and "macOS-side connection traps" sections of [SKILL.md](.claude/skills/hpc4/SKILL.md).
+
+</details>
+
+<details>
+<summary><b>File layout</b></summary>
 
 ```
 .claude/skills/hpc4/
-├── SKILL.md              Claude 向け instruction（本 skill の振る舞い定義）
-├── README.md             本ファイル（人間向けガイド）
-├── ssh_config            HPC4 専用 SSH 設定（HostName を IP 直指定）
-├── user.conf.local       個人設定（gitignored、setup で生成される）
+├── SKILL.md              Claude-facing instructions (defines this skill's behavior)
+├── README.md             this file (human-facing guide)
+├── ssh_config            HPC4-only SSH config (HostName pinned to a literal IP)
+├── user.conf.local       personal config (gitignored; produced by setup)
 └── scripts/
-    ├── common.sh         共通定数とヘルパー関数
-    ├── status.sh         接続状態の診断
-    ├── net-up.sh         HPC4 host route を pin する
-    ├── net-down.sh       HPC4 host route を取り外す
-    ├── ssh-run.sh        HPC4 でコマンド実行
-    ├── xfer.sh           ファイル転送 (scp/rsync)
-    └── write-user-conf.sh  user.conf.local 生成
+    ├── common.sh         shared constants and helpers
+    ├── status.sh         connection-status diagnostic
+    ├── net-up.sh         diagnose/prepare the HPC4 route without AI-side sudo
+    ├── net-up-local.sh   user-terminal helper for sudo route/pf changes
+    ├── net-down.sh       remove the HPC4 host route
+    ├── net-down-local.sh user-terminal helper for sudo teardown
+    ├── ssh-run.sh        run a command on HPC4
+    ├── xfer.sh           file transfer (scp/rsync)
+    └── write-user-conf.sh  generate user.conf.local
+```
+
+Codex uses the analogous project-local layout:
+
+```
+.codex/skills/hpc4/
+├── SKILL.md
+├── ssh_config
+├── user.conf.local       personal config (gitignored; produced by setup)
+└── scripts/
 ```
 
 </details>
 
 <details>
-<summary><b>メンテナンス（HPC4 の IP 変更時）</b></summary>
+<summary><b>Maintenance (when HPC4's IP changes)</b></summary>
 
-HKUST から `hpc4.ust.hk` の IP 変更通知を受けた場合、以下 2 箇所を更新する:
+If HKUST notifies you that `hpc4.ust.hk` has a new IP, update both of these:
 
-- [scripts/common.sh](scripts/common.sh) の `HPC4_IP`
-- [ssh_config](ssh_config) の `HostName`
+- `HPC4_IP` in [scripts/common.sh](scripts/common.sh)
+- `HostName` in [ssh_config](ssh_config)
 
-両方を同じ IP に揃える（片方だけだと「ping は通るが ssh が繋がらない」等の不整合になる）。頻度は数年に 1 回程度の想定。
-
-</details>
-
-<details>
-<summary><b>トラブル時に人間が直接叩く debug 手段</b></summary>
-
-通常は Claude に「HPC4 の状態を確認して」「経路をリセットして」と頼めば手当する。それでも解決しない時:
-
-```
-ssh -F .claude/skills/hpc4/ssh_config -l <user> -vvv hpc4   # SSH 詳細ログ
-```
-
-各層の詳細な動作は [SKILL.md](.claude/skills/hpc4/SKILL.md) の「ネットワーク層の仕組み」「接続層の踏みやすい罠」節。
+Keep them in sync (drift causes "ping works but ssh doesn't" type inconsistencies). Expect this maybe once every few years.
 
 </details>
 
 <details>
-<summary><b>scripts 一覧</b>（直接叩く時の参照）</summary>
+<summary><b>Manual debug commands</b></summary>
 
-通常は Claude に自然言語で頼めばよい。Claude を介さず手で叩きたい時の参照:
+Normally you can ask Claude to "check HPC4 status" or "reset the route" and it'll fix it. When that doesn't work:
 
-| script | 内容 |
+```
+ssh -F .claude/skills/hpc4/ssh_config -l <user> -vvv hpc4   # verbose SSH log
+```
+
+Per-layer details are in the "How the network layer works" and "macOS-side connection traps" sections of [SKILL.md](.claude/skills/hpc4/SKILL.md).
+
+</details>
+
+<details>
+<summary><b>Scripts cheat sheet</b> (for direct invocation)</summary>
+
+Normally you'd just ask Claude. When you want to call them directly:
+
+| script | what it does |
 |---|---|
-| `bash .claude/skills/hpc4/scripts/status.sh` | 現在の接続状態を表示（sudo 不要） |
-| `bash .claude/skills/hpc4/scripts/write-user-conf.sh <itso_username>` | `user.conf.local` を生成（初回 setup） |
-| `bash .claude/skills/hpc4/scripts/net-up.sh` | HPC4 行きの host route を pin する（冪等） |
-| `bash .claude/skills/hpc4/scripts/net-down.sh` | HPC4 host route と ControlMaster を取り外す |
-| `bash .claude/skills/hpc4/scripts/ssh-run.sh '<command>'` | HPC4 上で任意コマンドを実行 |
-| `bash .claude/skills/hpc4/scripts/xfer.sh put <local> <remote>` | ファイルを HPC4 にアップロード |
-| `bash .claude/skills/hpc4/scripts/xfer.sh get <remote> <local>` | ファイルを HPC4 からダウンロード |
-| `bash .claude/skills/hpc4/scripts/xfer.sh put-r <local> <remote>` | ディレクトリを rsync で送る |
-| `bash .claude/skills/hpc4/scripts/xfer.sh get-r <remote> <local>` | ディレクトリを rsync で取得 |
+| `bash .claude/skills/hpc4/scripts/status.sh` | Show current connection status (no sudo). |
+| `bash .claude/skills/hpc4/scripts/write-user-conf.sh <itso_username>` | Generate `user.conf.local` (first-time setup). |
+| `bash .claude/skills/hpc4/scripts/net-up.sh` | Pin the HPC4 host route (idempotent). |
+| `bash .claude/skills/hpc4/scripts/net-down.sh` | Remove the HPC4 host route and ControlMaster. |
+| `bash .claude/skills/hpc4/scripts/ssh-run.sh '<command>'` | Run an arbitrary command on HPC4. |
+| `bash .claude/skills/hpc4/scripts/xfer.sh put <local> <remote>` | Upload a file to HPC4. |
+| `bash .claude/skills/hpc4/scripts/xfer.sh get <remote> <local>` | Download a file from HPC4. |
+| `bash .claude/skills/hpc4/scripts/xfer.sh put-r <local> <remote>` | Send a directory via rsync. |
+| `bash .claude/skills/hpc4/scripts/xfer.sh get-r <remote> <local>` | Pull a directory via rsync. |
 
-`ssh-run.sh` / `xfer.sh` は内部で `net-up.sh` 相当の経路整備を自動で行うので、経路を意識せず目的の操作を直接呼んでよい。
+`ssh-run.sh` / `xfer.sh` internally call the equivalent of `net-up.sh` automatically, so you can call them directly without thinking about routing.
 
 </details>

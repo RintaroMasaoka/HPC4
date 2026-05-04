@@ -56,7 +56,7 @@ sudo_cmd() {
 
     err "sudo is required for this local route/pf change, and Codex must not wait for an interactive password prompt."
     err "Run this helper once in your own Terminal, then retry from Codex:"
-    err "  bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
+    err "  bash \"${HPC4_LOCAL_HELPER:-${SKILL_DIR}/scripts/net-up-local.sh}\""
     return 20
 }
 

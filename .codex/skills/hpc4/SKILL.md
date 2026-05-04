@@ -45,6 +45,7 @@ Every script below is invoked as `bash .codex/skills/hpc4/scripts/<name>.sh [arg
 | `net-up.sh` | none | Prepare or repair the HPC4 route/pf exception |
 | `net-up-local.sh` | none | User-terminal helper for the same repair when local `sudo` password/Touch ID is required |
 | `net-down.sh` | none | Remove the HPC4 host route, pf anchor rules, and ControlMaster socket during troubleshooting |
+| `net-down-local.sh` | none | User-terminal helper for teardown when local `sudo` password/Touch ID is required |
 | `write-user-conf.sh` | `<itso_username>` | Create local personal config during setup |
 
 `ssh-run.sh` and `xfer.sh` call `net-up.sh` automatically when TCP/22 is not reachable, so Codex can call the goal operation directly.
