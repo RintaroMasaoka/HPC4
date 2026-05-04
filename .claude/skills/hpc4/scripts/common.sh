@@ -131,6 +131,22 @@ ping_ok() {
     ping -c 2 -W "${t}000" "$HPC4_IP" >/dev/null 2>&1
 }
 
+# route socket が permission で塞がれているか。
+# Codex sandbox / 非 escalated 環境では `route -n get` / `ping` /
+# 一部 TCP probe が "Operation not permitted" を返し、実体は届いていても
+# 「経路欠落」と誤診断される。この helper はその false negative の入口を捕える。
+# 真なら呼出側は route 操作系（sudo route add 等）を促してはいけない。
+route_probe_restricted() {
+    local out
+    out=$(route -n get "$HPC4_IP" 2>&1)
+    case "$out" in
+        *"Operation not permitted"*) return 0 ;;
+        *"not permitted"*)           return 0 ;;
+        *"Permission denied"*)       return 0 ;;
+    esac
+    return 1
+}
+
 # --- SSH ラッパ用ヘルパ -----------------------------------------------------
 # macOS 既定 bash 3.2 互換のため mapfile / nameref は使わない
 

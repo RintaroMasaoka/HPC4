@@ -15,12 +15,27 @@ source "$(dirname "$0")/common.sh"
 
 printf "## HPC4 接続状態 (%s)\n" "$(date '+%F %T')"
 
+# Codex sandbox / 非 escalated 環境では route socket / ICMP / TCP probe が
+# 軒並み false negative になる。この flag が立つ場合、route 系の判定失敗は
+# [ng] ではなく [?] (sandbox restricted) として表示し、user に「不要な
+# sudo route add が必要」と誤認させない。
+restricted=0
+if route_probe_restricted; then
+    restricted=1
+fi
+
 # --- (1) 個人設定 -----------------------------------------------------------
 if [[ -f "$USER_CONF" ]] && [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "your_itso_username" ]]; then
     printf "  [ok]   user.conf.local 読み込み済み (HPC4_USER=%s, account=%s, partition=%s)\n" \
         "$HPC4_USER" "$HPC4_ACCOUNT" "$HPC4_PARTITION"
 else
     printf "  [err]  user.conf.local 未作成。bash .claude/skills/hpc4/scripts/write-user-conf.sh <itso_username> を実行してください\n"
+fi
+
+if (( restricted )); then
+    printf "  [?]    route socket 制限を検出（Codex sandbox / 非 escalated 環境の特徴）\n"
+    printf "         経路・疎通・SSH 認証の判定は false negative になり得るため [?] で表示します\n"
+    printf "         実際は HPC4 に届いている可能性があります。確実な判定は別ターミナルから\n"
 fi
 
 # --- (2) HKUST 圏内能力（routing と独立） ----------------------------------
@@ -53,13 +68,15 @@ resolve="$(hpc4_route_resolve)"
 egress="$(printf '%s' "$resolve" | awk '{print $1}')"
 
 if [[ -z "$egress" ]] || ! iface_is_hkust_capable "$egress"; then
-    printf "  [ng]   HPC4 egress：%s（HKUST 圏外）\n" "${egress:-なし}"
-    printf "         HKUST 圏内 IF (%s) はあるのに kernel が別 IF を選んでいます\n" "$hkust_iface"
-    printf "         → 別ターミナルで sudo route -n add -host %s -interface %s を実行\n" "$HPC4_IP" "$hkust_iface"
-    exit 0
-fi
-
-if [[ -n "$existing_pin" ]]; then
+    if (( restricted )); then
+        printf "  [?]    HPC4 egress：判定不能（route socket 制限）\n"
+    else
+        printf "  [ng]   HPC4 egress：%s（HKUST 圏外）\n" "${egress:-なし}"
+        printf "         HKUST 圏内 IF (%s) はあるのに kernel が別 IF を選んでいます\n" "$hkust_iface"
+        printf "         → 別ターミナルで sudo route -n add -host %s -interface %s を実行\n" "$HPC4_IP" "$hkust_iface"
+        exit 0
+    fi
+elif [[ -n "$existing_pin" ]]; then
     printf "  [ok]   HPC4 経路：%s 経由（host pin あり）\n" "$egress"
 else
     printf "  [ok]   HPC4 経路：%s 経由（kernel の自然な longest-prefix-match）\n" "$egress"
@@ -68,6 +85,8 @@ fi
 # --- (5) 疎通 ---------------------------------------------------------------
 if tcp22_ok 5; then
     printf "  [ok]   TCP 22 到達 OK\n"
+elif (( restricted )); then
+    printf "  [?]    TCP 22 疎通：判定不能（sandbox で probe が制限されている可能性）\n"
 else
     printf "  [ng]   TCP 22 不通：L3 経路は OK だが L4 で塞がれている\n"
     printf "         → bash .claude/skills/hpc4/scripts/net-up.sh で詳細診断\n"
@@ -79,6 +98,8 @@ fi
 if [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "your_itso_username" ]]; then
     if ssh_passwordless_ok; then
         printf "  [ok]   passwordless SSH 成立\n"
+    elif (( restricted )); then
+        printf "  [?]    passwordless SSH：判定不能（sandbox で BatchMode SSH が制限されている可能性）\n"
     else
         printf "  [ng]   passwordless SSH 未成立（公開鍵の登録が必要）\n"
         printf "         → ssh-copy-id -i ~/.ssh/id_ed25519.pub %s@%s （別ターミナルで一度だけ）\n" "$HPC4_USER" "$HPC4_HOST"
