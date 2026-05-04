@@ -59,7 +59,7 @@ existing_pin="$(current_hpc4_iface)"
 if [[ -n "$existing_pin" ]] && ! iface_is_hkust_capable "$existing_pin"; then
     printf "  [ng]   HPC4 host route：%s に固定済みだが HKUST 圏外（stale pin）\n" "$existing_pin"
     printf "         longest-prefix-match でこの pin が natural route を上書きしています\n"
-    printf "         → 別ターミナルで sudo route -n delete -host %s を実行\n" "$HPC4_IP"
+    printf "         → 別ターミナルで bash .claude/skills/hpc4/scripts/net-up-local.sh を実行\n"
     exit 0
 fi
 
@@ -73,7 +73,7 @@ if [[ -z "$egress" ]] || ! iface_is_hkust_capable "$egress"; then
     else
         printf "  [ng]   HPC4 egress：%s（HKUST 圏外）\n" "${egress:-なし}"
         printf "         HKUST 圏内 IF (%s) はあるのに kernel が別 IF を選んでいます\n" "$hkust_iface"
-        printf "         → 別ターミナルで sudo route -n add -host %s -interface %s を実行\n" "$HPC4_IP" "$hkust_iface"
+        printf "         → 別ターミナルで bash .claude/skills/hpc4/scripts/net-up-local.sh を実行\n"
         exit 0
     fi
 elif [[ -n "$existing_pin" ]]; then
