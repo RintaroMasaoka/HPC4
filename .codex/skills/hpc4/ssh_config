@@ -1,0 +1,23 @@
+# HPC4-only SSH config (project-local, shared across all members).
+# Callers use this with: `ssh -F .codex/skills/hpc4/ssh_config -l <username> hpc4 ...`
+# We do not modify ~/.ssh/config; nothing leaks outside this repo.
+
+Host hpc4 hpc4.ust.hk
+    # HostName is a literal IP. macOS ssh's getaddrinfo only consults
+    # /etc/resolv.conf, so when Ivanti / a full VPN is up the ust.hk domain
+    # cannot be resolved and ssh dies with "Could not resolve". The IP itself
+    # matches HPC4_IP in net-up.sh / common.sh.
+    HostName 143.89.184.3
+    HostKeyAlias hpc4.ust.hk
+    # User is set by scripts via -l (each member's ITSO account name).
+    # ControlMaster: after the first auth (password+2FA), the same master
+    # connection is reused for 12h.
+    ControlMaster auto
+    ControlPath /tmp/hpc4-cm-%r@%h-%p
+    ControlPersist 12h
+    # Keep idle connections alive across NAT / firewalls.
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+    # Try public-key first, fall back to keyboard-interactive (password+2FA)
+    # if not yet registered.
+    PreferredAuthentications publickey,keyboard-interactive,password
