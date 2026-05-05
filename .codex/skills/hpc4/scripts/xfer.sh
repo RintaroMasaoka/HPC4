@@ -25,13 +25,15 @@ EOF
 
 op="$1"; src="$2"; dst="$3"
 
-if ! tcp22_ok; then
-    log "SSH route not ready. Running net-up.sh"
+if ! tcp22_ok 1; then
+    log "Route not yet ready. Running net-up.sh"
     bash "$(dirname "$0")/net-up.sh" || exit $?
 fi
 
-# rsync's --rsh receives one string.
-rsh_opts="$(printf '%q ' "${HPC4_SSH_OPTS[@]}")"
+# rsync's -e is a single string, so quoting bugs creep in if SSH_CONFIG has
+# spaces. Confine HPC4_SSH_OPTS expansion to ssh-wrap.sh.
+# The wrapper path itself may also contain spaces, so single-quote it as one token.
+ssh_wrap="$(dirname "$0")/ssh-wrap.sh"
 
 case "$op" in
     put)
@@ -41,10 +43,10 @@ case "$op" in
         exec scp "${HPC4_SSH_OPTS[@]}" -o BatchMode=yes "hpc4:$src" "$dst"
         ;;
     put-r)
-        exec rsync -avz --progress -e "ssh ${rsh_opts}" "$src/" "hpc4:$dst/"
+        exec rsync -avz --progress -e "'$ssh_wrap'" "$src/" "hpc4:$dst/"
         ;;
     get-r)
-        exec rsync -avz --progress -e "ssh ${rsh_opts}" "hpc4:$src/" "$dst/"
+        exec rsync -avz --progress -e "'$ssh_wrap'" "hpc4:$src/" "$dst/"
         ;;
     *)
         usage

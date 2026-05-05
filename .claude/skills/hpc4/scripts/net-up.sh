@@ -7,7 +7,7 @@
 #   - 触る対象を案内するのは HPC4 IP の host route ただ 1 つ。
 #   - 既存 pin が HKUST 圏外を指している stale 状態と、そもそも HKUST 圏外に居る
 #     状態を **別の error path で** 報告する（昔は両方とも「圏外」に合流していた）。
-#   - L4 で塞がれている時は VPN クライアント GUI 操作の手順を terminal 直読の日本語で出す。
+#   - L4 で塞がれていて pf anchor でも復旧できない時は user space から復旧不能として止める。
 #
 # Exit code:
 #   0  経路 OK + TCP 22 到達 OK
@@ -15,9 +15,52 @@
 #   2  L3 経路は OK だが TCP 22 不通（L4 遮断）
 #   3  user Terminal helper による sudo 操作が必要
 #   4  route socket が sandbox / permission で制限されており判定不能
+#   5  pin の add/delete を繰り返す発振状態（find_hkust_iface と
+#      iface_is_hkust_capable の判定が食い違っている）を検出して中断
 
 set -u
 source "$(dirname "$0")/common.sh"
+
+# --- (-1) 再帰深度ガード -----------------------------------------------------
+# net-up.sh は stale pin 削除 / pin 追加 / pf anchor 適用の後に exec bash "$0"
+# で自分を再起動する。判定関数同士が食い違っていると無限ループに入って sudo
+# プロンプトを延々と再表示してしまうので、深度を環境変数で持ち回って打ち切る。
+HPC4_NET_UP_DEPTH="${HPC4_NET_UP_DEPTH:-0}"
+HPC4_NET_UP_DEPTH=$((HPC4_NET_UP_DEPTH + 1))
+export HPC4_NET_UP_DEPTH
+if (( HPC4_NET_UP_DEPTH > 4 )); then
+    err "net-up.sh が ${HPC4_NET_UP_DEPTH} 回連続で再判定されました（pin の add/delete 発振）。"
+    err "find_hkust_iface() と iface_is_hkust_capable() の判定が食い違っている可能性が高いです。"
+    err ""
+    err "現状："
+    err "  find_hkust_iface     : $(find_hkust_iface)"
+    err "  current_hpc4_iface   : $(current_hpc4_iface)"
+    err "  en0 IPv4             : $(ifconfig en0 2>/dev/null | awk '/inet /{print $2; exit}')"
+    err "  default route        : $(netstat -rn -f inet 2>/dev/null | awk '$1=="default"{print $NF, "via", $2; exit}')"
+    err ""
+    err "回避策：bash \"${SKILL_DIR}/scripts/net-down.sh\" で host pin を一度削除し、"
+    err "        ネットワーク状態（HKUST eduroam か / Ivanti が起動しているか）を見直してください。"
+    exit 5
+fi
+
+# --- (0a) NordVPN helper の kill-switch (block drop all) を proactive に flush ---
+# NordVPN helper は VPN 接続時に pf main ruleset へ `block drop all` 系の
+# kill-switch rule を入れる。これは com.apple/* anchor 配下より先に評価される
+# ため、anchor で `pass quick` を入れても貫通できない（過去の `com.apple/hpc4`
+# anchor 戦略は撤去済み）。唯一の対処は main rules ごと flush すること。
+# NordVPN tunnel (utun7) と Claude 経路は kernel routing で維持されるので無害。
+# NordVPN を Disconnect/Connect / Pause/Resume すると rules は再注入されるので、
+# その都度 net-up-local.sh を再実行すれば再度 flush される。
+#
+# AI 実行（sudo 不可）では skip。L4 で塞がれた時に reactive で user に案内する
+# 後段ロジックが受ける。user terminal (net-up-local.sh) のときだけ proactive 動作。
+if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
+    if sudo_cmd pfctl -s rules 2>/dev/null | grep -q '^block drop all'; then
+        log "pf main ruleset に kill-switch (block drop all) を検出。flush します。"
+        sudo_cmd pfctl -F rules >/dev/null 2>&1 || warn "pf rules flush に失敗（permission?）"
+        ok "pf main rules flush 完了（NordVPN tunnel・Claude 経路は無傷）"
+    fi
+fi
 
 # --- (0) TCP fast-path：TCP 22 が既に通れば routing は全て正常 ---------------
 # eduroam NAT (10.79/16) + NordVPN 同居など、IF 判定では捕捉しにくい構成でも
@@ -74,7 +117,7 @@ if [[ -n "$existing_pin" ]] && ! iface_is_hkust_capable "$existing_pin"; then
     fi
     err "前回 set した HPC4 host route が ${existing_pin} (HKUST 圏外) を指したまま残っています。"
     err "削除には sudo が必要です。別ターミナルで helper を実行してください："
-    err "    bash \"$(dirname "$0")/net-up-local.sh\""
+    err "    bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
     exit 3
 fi
 
@@ -93,7 +136,7 @@ if [[ -z "$egress" ]] || ! iface_is_hkust_capable "$egress"; then
     fi
     err "HKUST 圏内 IF (${hkust_iface}) は存在しますが、kernel は HPC4 を別 IF (${egress:-なし}) に流しています。"
     err "host pin には sudo が必要です。別ターミナルで helper を実行してください："
-    err "    bash \"$(dirname "$0")/net-up-local.sh\""
+    err "    bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
     exit 3
 fi
 
@@ -109,39 +152,30 @@ if tcp22_ok 5; then
     exit 0
 fi
 
-# --- (5) L4 で塞がれている：kill-switch 系 VPN なら pf anchor で貫通させる ----
-# default が NordVPN 系の POINTOPOINT IF に握られている時、その VPN の pf rules が
-# en0 outbound を一律 drop するため、host route が正しくても TCP 22 が通らない。
-# 対策：HPC4 宛だけ pass する pf anchor (PF_ANCHOR) を入れて kill-switch を貫通させる。
-fullvpn_iface="$(fullvpn_default_route || true)"
-if [[ -n "$fullvpn_iface" ]]; then
-    if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-        log "HPC4 宛だけ通す pf anchor (${PF_ANCHOR}) を ${egress} に適用します"
-        hpc4_apply_pf_anchor "$egress" || exit $?
-        ok "pf anchor を適用しました。再判定します。"
-        exec bash "$0"
-    fi
-    err "L3 は ${egress} で正しいですが TCP 22 が通りません。"
-    err "default route が ${fullvpn_iface} (kill-switch 系フル VPN と推定) に奪取されており、"
-    err "その pf rules が en0 outbound を遮断しているのが原因と推定されます。"
-    err "pf anchor 適用には sudo が必要です。別ターミナルで helper を実行してください："
-    err "    bash \"$(dirname "$0")/net-up-local.sh\""
-    exit 3
-fi
-
-err "L3 ルーティングは ${egress} で正しいですが TCP 22 が通りません。L4 (firewall / packet filter) 側で塞がれています。"
-err "default route は ${egress} の方へ向いているため kill-switch 系フル VPN は検出されませんでした。"
+# --- (5) L4 で塞がれている -----------------------------------------------
+# 経路は HKUST 圏内 IF に出ているのに TCP 22 が通らない。最有力は NordVPN 等の
+# helper が pf main ruleset に書き込む kill-switch 系 rule (`block drop all`
+# + 自身の helper だけ pass)。これは com.apple/* anchor より先に評価されるので、
+# skill 側から com.apple/hpc4 anchor に pass quick を入れる戦略は届かない（過去
+# 実装で確認済み、撤去済み）。唯一の対処は user に main rules ごと flush して
+# もらうこと。flush 後 NordVPN tunnel と Claude 経路はそのまま生き、HPC4 が通る。
+err "L3 経路は ${egress} で正しいですが TCP 22 が通りません。L4 (firewall / packet filter) 側で塞がれています。"
 err ""
-err "考えられる原因と対処（terminal だけで判断・実行できます）："
+err "最有力の原因と対処："
 err ""
-err "  1. 他 VPN クライアント (NordVPN 等) の kill-switch / packet filter が outbound を遮断している"
-err "     → 当該 VPN クライアントの設定 GUI で 143.89.184.3 (or 143.89.0.0/16) を例外に追加"
-err "       設定項目名は製品ごとに違う：split tunneling / allowed IPs / excluded IPs /"
-err "       trusted apps / bypass list 等のラベルを探してください"
+err "  A. pf main ruleset に kill-switch 系 rule (block drop all) が居る"
+err "     （NordVPN 等の helper が VPN 接続時に書き込むタイプ。anchor より先に"
+err "      評価されるので skill 側からは貫通不可）"
+err "     → 別ターミナルで以下を 1 行実行してください："
+err "         sudo pfctl -F rules"
+err "       これで main ruleset が flush され、HPC4 への traffic が通ります。"
+err "       NordVPN tunnel (utun7 等) と Claude 経路はそのまま生きます。"
+err "       NordVPN を Disconnect/Connect すると rules が再注入されるので、"
+err "       その都度 flush してください。"
 err ""
-err "  2. NEPacketTunnelProvider (\`includeAllNetworks=true\`) で system 強制 tunnel"
-err "     → user space からは override 不可。当該 VPN を一時停止してください"
+err "  B. NEPacketTunnelProvider (\`includeAllNetworks=true\`) によるシステム強制 tunnel"
+err "     → user space からは override 不可。当該 VPN クライアントの設定を見直してください。"
 err ""
-err "  3. HKUST tunnel (Ivanti) の認証/再接続が未完了"
-err "     → Ivanti Secure Access を一旦切って繋ぎ直してください"
+err "  C. HKUST tunnel (Ivanti) の認証/再接続が未完了"
+err "     → Ivanti Secure Access の接続状態と認証完了を確認してください。"
 exit 2

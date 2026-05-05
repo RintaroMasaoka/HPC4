@@ -11,7 +11,6 @@ set -u
 # --- グループ共通の固定パラメータ -------------------------------------------
 HPC4_HOST="hpc4.ust.hk"
 HPC4_IP="143.89.184.3"
-PF_ANCHOR="main/hpc4"
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SSH_CONFIG="${SKILL_DIR}/ssh_config"
@@ -102,9 +101,19 @@ iface_is_hkust_capable() {
 #
 # 判定順:
 #   (1) 143.89/16 IP を直接持つ IF（HKUST VPN / 有線）
-#   (2) routing table に「143.89.x → private GW 経由で物理 IF」が存在（eduroam NAT + 既存 host route）
-#   (3) route get が physical IF を返し、その IF が private IP を持つ（NordVPN が default を奪っていない場合）
-#   (4) HKUST eduroam 特有の 10.79/16 IP を持つ物理 IF（最終手段）
+#   (2) HKUST eduroam 特有の 10.79/16 IP を持つ物理 IF
+#   (3) routing table に「143.89.x → private GW 経由で物理 IF」が存在
+#       (eduroam NAT + 既存 host route) — ただし stale 経路で誤検出しないよう
+#       iface_is_hkust_capable で再検証する
+#   (4) route get が physical IF を返し、それが iface_is_hkust_capable を満たす
+#       (NordVPN 等が default を奪っていない場合)
+#
+# 重要: Path 3/4 は heuristic なので、必ず iface_is_hkust_capable で確証を取る。
+# これを怠ると過去 session の stale な netstat エントリ（例: 以前 HKUST eduroam
+# 圏に居た時の `143.89.x → 10.79.255.254 → en0`）が現在の en0 (172.22/22 等の
+# 別ネット) を誤って HKUST capable と判定し、net-up.sh が pin を add → 次の
+# iface_is_hkust_capable で reject → stale 認定して delete → ... の無限ループを
+# 引き起こす。
 find_hkust_iface() {
     local iface
     iface=$(ifconfig 2>/dev/null | awk '
@@ -113,31 +122,50 @@ find_hkust_iface() {
     ')
     [[ -n "$iface" ]] && { printf '%s' "$iface"; return 0; }
 
+    iface=$(ifconfig 2>/dev/null | awk '
+        /^en/ { iface=$1; sub(":", "", iface) }
+        /inet 10\.79\./ { print iface; exit }
+    ')
+    [[ -n "$iface" ]] && { printf '%s' "$iface"; return 0; }
+
     iface=$(netstat -rn 2>/dev/null | awk '
         /^143\.89\./ &&
         ($2 ~ /^10\./ || $2 ~ /^192\.168\./) &&
         $NF ~ /^en/ { print $NF; exit }
     ')
-    [[ -n "$iface" ]] && { printf '%s' "$iface"; return 0; }
+    if [[ -n "$iface" ]] && iface_is_hkust_capable "$iface"; then
+        printf '%s' "$iface"
+        return 0
+    fi
 
     local route_iface
     route_iface=$(route get "$HPC4_IP" 2>/dev/null | awk '/interface:/{print $2}')
-    if [[ -n "$route_iface" ]] && [[ "$route_iface" =~ ^en ]]; then
-        if ifconfig "$route_iface" 2>/dev/null | grep -qE 'inet (10\.|192\.168\.)'; then
-            printf '%s' "$route_iface"
-            return 0
-        fi
+    if [[ -n "$route_iface" ]] && [[ "$route_iface" =~ ^en ]] \
+        && iface_is_hkust_capable "$route_iface"; then
+        printf '%s' "$route_iface"
+        return 0
     fi
-
-    ifconfig 2>/dev/null | awk '
-        /^en/ { iface=$1; sub(":", "", iface) }
-        /inet 10\.79\./ { print iface; exit }
-    '
 }
 
 # 既存の HPC4 host route が指す IF（無ければ空）
 current_hpc4_iface() {
     netstat -rn 2>/dev/null | awk -v ip="$HPC4_IP" '$1==ip {print $NF; exit}'
+}
+
+# 指定 IF の最初の IPv4 アドレス（無ければ空）
+iface_ipv4() {
+    [[ -n "${1:-}" ]] || return 1
+    ifconfig "$1" 2>/dev/null | awk '/inet /{print $2; exit}'
+}
+
+# HPC4 pin が指す IF の IPv4 を返す（BindAddress として nc / ssh に渡す用）。
+# multi-homed (en0 + utun) で kernel が誤った egress を選ぶのを防ぐ。
+# pin が無いか IF が空なら空文字を返す（呼出側で BindAddress なしに fallback）。
+hpc4_bind_addr() {
+    local iface
+    iface="$(current_hpc4_iface)"
+    [[ -n "$iface" ]] || return 1
+    iface_ipv4 "$iface"
 }
 
 # 指定 IF の default gateway（DHCP / VPN 由来）。無ければ空。
@@ -165,45 +193,19 @@ hpc4_pin_route() {
     sudo_cmd route -n add -host "$HPC4_IP" -gateway "$gw"
 }
 
-# kill-switch 系フル VPN（NordVPN / SurfShark / ExpressVPN / Proton / Mullvad
-# / WireGuard / OpenVPN / Cisco AnyConnect 等）が default route を奪っているか。
-# 該当なら IF 名を出力。判定基準は「default route の出口 IF が POINTOPOINT で、
-# かつそれが HKUST tunnel (143.89/16 IP を持つ) ではない」。
-# このタイプは pf で en0 出力を塞ぐので、HPC4 宛だけ pf anchor で例外許可しないと
-# host route が正しくても L4 で落とされる。
-fullvpn_default_route() {
-    local iface
-    iface="$(netstat -rn -f inet 2>/dev/null | awk '$1=="default" {print $NF; exit}')"
-    [[ -z "$iface" ]] && return 1
-    local flags
-    flags="$(ifconfig "$iface" 2>/dev/null | awk 'NR==1')"
-    [[ "$flags" == *POINTOPOINT* ]] || return 1
-    if ifconfig "$iface" 2>/dev/null | grep -q 'inet 143\.89\.'; then
-        return 1
-    fi
-    printf '%s' "$iface"
-}
-
-hpc4_apply_pf_anchor() {
-    local iface="${1:-}"
-    [[ -n "$iface" ]] || return 1
-    local rules_file
-    rules_file="$(mktemp "${TMPDIR:-/tmp}/hpc4-pf.XXXXXX")" || return 1
-    cat >"$rules_file" <<EOF
-pass out quick on ${iface} inet proto tcp from any to ${HPC4_IP} flags any keep state
-pass out quick on ${iface} inet proto icmp from any to ${HPC4_IP} keep state
-EOF
-    sudo_cmd pfctl -a "$PF_ANCHOR" -f "$rules_file"
-    local rc=$?
-    rm -f "$rules_file"
-    return "$rc"
-}
-
 # TCP 22 が通るか（タイムアウト秒、既定 5）
 # macOS 既定 nc は BSD 系で -G が connect timeout、-w が overall I/O timeout
+# pin が立っていればその IF の IPv4 を source として bind し、multi-homed (en0 + utun)
+# で kernel が誤った egress を選んで「pin はあるのに probe は VPN 側に流れた」状態
+# になるのを防ぐ。pin が無い時は通常の autoselect。
 tcp22_ok() {
-    local t="${1:-5}"
-    nc -z -G "$t" -w "$t" "$HPC4_IP" 22 >/dev/null 2>&1
+    local t="${1:-5}" bind_addr
+    bind_addr="$(hpc4_bind_addr || true)"
+    if [[ -n "$bind_addr" ]]; then
+        nc -s "$bind_addr" -z -G "$t" -w "$t" "$HPC4_IP" 22 >/dev/null 2>&1
+    else
+        nc -z -G "$t" -w "$t" "$HPC4_IP" 22 >/dev/null 2>&1
+    fi
 }
 
 # ping で疎通確認（タイムアウト秒、既定 2）
@@ -232,12 +234,17 @@ route_probe_restricted() {
 # macOS 既定 bash 3.2 互換のため mapfile / nameref は使わない
 
 build_ssh_opts() {
+    local bind_addr
     HPC4_SSH_OPTS=(-F "$SSH_CONFIG")
     if [[ -n "${HPC4_USER:-}" ]]; then
         HPC4_SSH_OPTS+=(-l "$HPC4_USER")
     fi
     if [[ -n "${HPC4_IDENTITY_FILE:-}" ]]; then
         HPC4_SSH_OPTS+=(-i "$HPC4_IDENTITY_FILE" -o IdentitiesOnly=yes)
+    fi
+    bind_addr="$(hpc4_bind_addr || true)"
+    if [[ -n "$bind_addr" ]]; then
+        HPC4_SSH_OPTS+=(-o "BindAddress=${bind_addr}")
     fi
 }
 build_ssh_opts

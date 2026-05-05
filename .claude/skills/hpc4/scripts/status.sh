@@ -29,7 +29,7 @@ if [[ -f "$USER_CONF" ]] && [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "you
     printf "  [ok]   user.conf.local 読み込み済み (HPC4_USER=%s, account=%s, partition=%s)\n" \
         "$HPC4_USER" "$HPC4_ACCOUNT" "$HPC4_PARTITION"
 else
-    printf "  [err]  user.conf.local 未作成。bash .claude/skills/hpc4/scripts/write-user-conf.sh <itso_username> を実行してください\n"
+    printf "  [err]  user.conf.local 未作成。bash \"%s/scripts/write-user-conf.sh\" <itso_username> を実行してください\n" "$SKILL_DIR"
 fi
 
 if (( restricted )); then
@@ -59,7 +59,7 @@ existing_pin="$(current_hpc4_iface)"
 if [[ -n "$existing_pin" ]] && ! iface_is_hkust_capable "$existing_pin"; then
     printf "  [ng]   HPC4 host route：%s に固定済みだが HKUST 圏外（stale pin）\n" "$existing_pin"
     printf "         longest-prefix-match でこの pin が natural route を上書きしています\n"
-    printf "         → 別ターミナルで bash .claude/skills/hpc4/scripts/net-up-local.sh を実行\n"
+    printf "         → 別ターミナルで bash \"%s/scripts/net-up-local.sh\" を実行\n" "$SKILL_DIR"
     exit 0
 fi
 
@@ -73,7 +73,7 @@ if [[ -z "$egress" ]] || ! iface_is_hkust_capable "$egress"; then
     else
         printf "  [ng]   HPC4 egress：%s（HKUST 圏外）\n" "${egress:-なし}"
         printf "         HKUST 圏内 IF (%s) はあるのに kernel が別 IF を選んでいます\n" "$hkust_iface"
-        printf "         → 別ターミナルで bash .claude/skills/hpc4/scripts/net-up-local.sh を実行\n"
+        printf "         → 別ターミナルで bash \"%s/scripts/net-up-local.sh\" を実行\n" "$SKILL_DIR"
         exit 0
     fi
 elif [[ -n "$existing_pin" ]]; then
@@ -89,7 +89,7 @@ elif (( restricted )); then
     printf "  [?]    TCP 22 疎通：判定不能（sandbox で probe が制限されている可能性）\n"
 else
     printf "  [ng]   TCP 22 不通：L3 経路は OK だが L4 で塞がれている\n"
-    printf "         → bash .claude/skills/hpc4/scripts/net-up.sh で詳細診断\n"
+    printf "         → bash \"%s/scripts/net-up.sh\" で詳細診断\n" "$SKILL_DIR"
     printf "         → 他 VPN クライアントの kill-switch / packet filter 設定を確認\n"
     exit 0
 fi
