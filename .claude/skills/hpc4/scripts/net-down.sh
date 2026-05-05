@@ -16,17 +16,10 @@ if [[ -n "$iface" ]]; then
     else
         log "HPC4 host route が ${iface} に固定されています。削除には sudo が必要です。"
         log "別ターミナルで helper を実行してください："
-        log "    bash \"$(dirname "$0")/net-down-local.sh\""
+        log "    bash \"${SKILL_DIR}/scripts/net-down-local.sh\""
     fi
 else
     log "HPC4 host route は存在しません"
-fi
-
-if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-    log "pf anchor ${PF_ANCHOR} をフラッシュします"
-    sudo_cmd pfctl -a "$PF_ANCHOR" -F rules 2>/dev/null || warn "pf ルール削除に失敗（存在しなかった可能性）"
-else
-    log "kill-switch 貫通用 pf anchor (${PF_ANCHOR}) もフラッシュする場合は同じ helper が処理します"
 fi
 
 # ControlMaster の close は sudo 不要

@@ -1,5 +1,5 @@
 #!/bin/bash
-# User-terminal entry point for net-down.sh.
+# user の Terminal 専用 teardown entry point。
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

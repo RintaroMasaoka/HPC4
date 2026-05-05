@@ -1,9 +1,8 @@
 #!/bin/bash
-# User-terminal entry point for net-up.sh.
+# user の Terminal 専用 entry point。
 #
-# This wrapper is intentionally for a real local Terminal, not Codex automation:
-# it allows sudo to prompt for the Mac login password or Touch ID when route/pf
-# changes are needed.
+# Claude/Codex 等の AI 実行からは sudo password / Touch ID を扱わない。
+# route / pf 変更が必要な時だけ、この wrapper を user が自分の Terminal で実行する。
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
