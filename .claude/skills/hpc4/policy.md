@@ -26,7 +26,7 @@ VPN overview ページの記述：
 
 > "When connected, you will be assigned with a HKUST IP address instead of the one at home or while traveling, enabling access to restricted campus resources."
 
-つまり Ivanti は HKUST の 143.89/16 IP を割り当てる。**HPC4 (143.89.184.3) は HKUST IP からしか到達できない**ので、これが skill が判定基準にしている事実の出所。
+つまり Ivanti は HKUST の 143.89/16 IP を割り当てる。一方、HKUST キャンパス内 eduroam は HKUST 内部の NAT pool (`10.79/16`) を払い出し、内部 router 経由で HPC4 に届く。**HPC4 (143.89.184.3) はこのいずれか — HKUST 内部 network から見える経路 — からしか到達できない**ので、これが skill が判定基準にしている事実の出所。
 
 ## "on-campus" の境界 — eduroam の federated 性質
 
@@ -41,17 +41,17 @@ ITSO の Hotspot Locations ページが列挙する HKUST eduroam の coverage �
 - 多くの空港・駅
 - 海外の多くの大学
 
-これらの場所で eduroam に HKUST アカウントで認証して繋がっても、配布される IP はその施設の NAT pool（例：DT Hub では `172.22/16`）であり HKUST の `143.89/16` ではない。**ITSO 視点ではこれは "off-campus" 扱い** であり、HPC4 へ届くにはそこから別途 Ivanti VPN を張る必要がある。
+これらの場所で eduroam に HKUST アカウントで認証して繋がっても、配布される IP はその施設の NAT pool（例：DT Hub では `172.22/16`）であり HKUST 内部 network（有線 / Ivanti の `143.89/16` または HKUST キャンパス eduroam の `10.79/16`）ではない。**ITSO 視点ではこれは "off-campus" 扱い** であり、HPC4 へ届くにはそこから別途 Ivanti VPN を張る必要がある。
 
 「eduroam に繋がっている」と「HKUST 圏内に居る」は別物、というのがこの規約の最も非自明な点。
 
 ### 本 skill の判定基準との対応
 
-本 skill は「IF が `143.89/16` IPv4 を持っているか」だけで HKUST 圏内を判定する（`scripts/common.sh::find_hkust_iface` / `iface_has_hkust_ip`）。これは上記の federated 問題を一発で正しく弾くための設計：
+本 skill は「IF が `143.89/16` または HKUST eduroam の `10.79/16` IPv4 を持っているか（あるいは eduroam NAT 経由で `143.89.x` 宛 host route が HKUST 内部 GW を指しているか）」で HKUST 圏内を判定する（`scripts/common.sh::find_hkust_iface` / `iface_is_hkust_capable`）。これは上記の federated 問題を一発で正しく弾くための設計：
 
 | 場所・経路 | IF が持つ IP | skill 判定 | ITSO 規約上の扱い |
 |---|---|---|---|
-| HKUST キャンパス内 eduroam | 143.89/16 | ok | on-campus |
+| HKUST キャンパス内 eduroam | 10.79/16 | ok | on-campus |
 | HKUST 有線 | 143.89/16 | ok | on-campus |
 | Ivanti SSL VPN（どこからでも） | utun に 143.89/16 | ok | off-campus 救済策 |
 | DT Hub eduroam | 172.22/16 | ng | off-campus（規約上 Ivanti が必要） |
