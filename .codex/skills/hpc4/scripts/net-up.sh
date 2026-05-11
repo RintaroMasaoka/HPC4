@@ -102,6 +102,7 @@ if [[ -z "$hkust_iface" ]]; then
     err "あなたの Mac には HKUST 到達能力を持つ IF が一つもありません。"
     err "  → HKUST キャンパス内の eduroam (10.79/16 NAT) または HKUST 有線（オンキャンパスの場合）"
     err "  → Ivanti Secure Access (HKUST SSL VPN) を起動（オフキャンパスの場合）"
+    err "  → Ivanti の起動・Connect ボタン押下まで自動化する場合：bash \"${SKILL_DIR}/scripts/ivanti-up-local.sh\""
     err ""
     err "備考：eduroam は federated なので HKUST 以外（DT Hub 等の HKSTP 施設、他大学、空港）でも"
     err "      同じ SSID で繋がりますが、HKUST 構成員向け eduroam でないと HPC4 に届きません。"
