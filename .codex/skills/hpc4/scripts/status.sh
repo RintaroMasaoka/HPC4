@@ -45,6 +45,7 @@ if [[ -z "$hkust_iface" ]]; then
     printf "  [ng]   HKUST 到達能力なし：HKUST 圏内 IF が見つかりません\n"
     printf "         → HKUST キャンパス内の eduroam (10.79/16 NAT) または HKUST 有線（オンキャンパスの場合）\n"
     printf "         → Ivanti Secure Access (HKUST SSL VPN) を起動（オフキャンパスの場合）\n"
+    printf "         → Ivanti の起動・Connect ボタン押下まで自動化する場合：bash \"%s/scripts/ivanti-up-local.sh\"\n" "$SKILL_DIR"
     printf "         備考：eduroam は federated なので HKUST 外（DT Hub 等）でも繋がりますが\n"
     printf "               HKUST 構成員向け eduroam でないと HPC4 に届きません。詳細は .codex/skills/hpc4/policy.md\n"
     exit 0

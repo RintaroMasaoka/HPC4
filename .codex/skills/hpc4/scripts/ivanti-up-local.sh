@@ -47,7 +47,7 @@ ivanti_list_connections() {
     osascript <<'APPLESCRIPT'
 set sep to ASCII character 9
 set lf to ASCII character 10
-tell application "/Applications/Ivanti Secure Access.app"
+tell application id "net.pulsesecure.Pulse-Secure"
     set rows to {}
     repeat with c in every connection
         set idx to (indexStr of c) as text
@@ -70,7 +70,7 @@ ivanti_press_connect() {
     osascript - "$idx" <<'APPLESCRIPT'
 on run argv
     set idx to item 1 of argv
-    tell application "/Applications/Ivanti Secure Access.app"
+    tell application id "net.pulsesecure.Pulse-Secure"
         activate
         do PulseMainUI command "CONNECTBUTTON" ConnectionIndexStr idx
     end tell
