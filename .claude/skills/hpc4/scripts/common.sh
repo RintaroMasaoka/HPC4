@@ -50,8 +50,22 @@ sudo_cmd() {
     fi
 
     if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && -t 0 && -t 1 ]]; then
-        sudo "$@"
-        return $?
+        local tmp status line
+        tmp="$(mktemp -t hpc4-sudo.XXXXXX)" || {
+            err "sudo 実行用の一時ファイルを作成できませんでした。"
+            return 20
+        }
+
+        sudo "$@" 2>"$tmp"
+        status=$?
+        if (( status != 0 )); then
+            err "sudo command failed (exit ${status}): sudo $*"
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && err "  ${line}"
+            done <"$tmp"
+        fi
+        rm -f "$tmp"
+        return "$status"
     fi
 
     err "sudo が必要ですが、AI 実行から sudo prompt は扱いません。"

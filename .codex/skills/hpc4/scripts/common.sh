@@ -2,7 +2,7 @@
 # 共通定数とヘルパー。他スクリプトから source される。
 #
 # このスキルは HPC4 (143.89.184.3) への host route 一点だけを管理する。
-# default route や Claude 経路には絶対に触らない（破綻すると user が私に相談できなくなる）。
+# default route や Codex の通信経路には絶対に触らない（破綻すると user が相談できなくなる）。
 # VPN 製品の判別もしない。kernel の routing table に「143.89/16 を持つ IF」が
 # あるか無いか、それだけで判断する。
 
@@ -41,7 +41,7 @@ err()  { printf "[hpc4][err] %s\n" "$*" >&2; }
 
 # sudo が必要な操作を安全に実行する。
 #
-# 既定では AI 実行から sudo を試さない。sudo password / Touch ID は
+# 既定では Codex 実行から sudo を試さない。sudo password / Touch ID は
 # user の Terminal 専用 helper (net-up-local.sh) だけが扱う。
 sudo_cmd() {
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -50,11 +50,25 @@ sudo_cmd() {
     fi
 
     if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && -t 0 && -t 1 ]]; then
-        sudo "$@"
-        return $?
+        local tmp status line
+        tmp="$(mktemp -t hpc4-sudo.XXXXXX)" || {
+            err "sudo 実行用の一時ファイルを作成できませんでした。"
+            return 20
+        }
+
+        sudo "$@" 2>"$tmp"
+        status=$?
+        if (( status != 0 )); then
+            err "sudo command failed (exit ${status}): sudo $*"
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && err "  ${line}"
+            done <"$tmp"
+        fi
+        rm -f "$tmp"
+        return "$status"
     fi
 
-    err "sudo が必要ですが、AI 実行から sudo prompt は扱いません。"
+    err "sudo が必要ですが、Codex 実行から sudo prompt は扱いません。"
     err "別ターミナルで次を一度実行してから再試行してください:"
     err "  bash \"${HPC4_LOCAL_HELPER:-${SKILL_DIR}/scripts/net-up-local.sh}\""
     return 20
@@ -160,7 +174,7 @@ iface_ipv4() {
 
 # HPC4 pin が指す IF の IPv4 を返す（BindAddress として nc / ssh に渡す用）。
 # multi-homed (en0 + utun) で kernel が誤った egress を選ぶのを防ぐ。
-# pin が無いか IF が空なら空文字を返す（呼出側で BindAddress なしに fallback）。
+# pin が無いか IF が空なら空文字を返す（呼出側で BindAddress なしに切り替える）。
 hpc4_bind_addr() {
     local iface
     iface="$(current_hpc4_iface)"
