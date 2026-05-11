@@ -7,7 +7,8 @@
 #   - 触る対象を案内するのは HPC4 IP の host route ただ 1 つ。
 #   - 既存 pin が HKUST 圏外を指している stale 状態と、そもそも HKUST 圏外に居る
 #     状態を **別の error path で** 報告する（昔は両方とも「圏外」に合流していた）。
-#   - L4 で塞がれていて pf anchor でも復旧できない時は user space から復旧不能として止める。
+#   - user Terminal helper で L3 が正しいのに L4 だけ塞がれている時は、pf main
+#     ruleset を 1 回だけ flush して再判定する。AI 実行では sudo せず案内で止める。
 #
 # Exit code:
 #   0  経路 OK + TCP 22 到達 OK
@@ -22,7 +23,7 @@ set -u
 source "$(dirname "$0")/common.sh"
 
 # --- (-1) 再帰深度ガード -----------------------------------------------------
-# net-up.sh は stale pin 削除 / pin 追加 / pf anchor 適用の後に exec bash "$0"
+# net-up.sh は stale pin 削除 / pin 追加 / pf main ruleset flush の後に exec bash "$0"
 # で自分を再起動する。判定関数同士が食い違っていると無限ループに入って sudo
 # プロンプトを延々と再表示してしまうので、深度を環境変数で持ち回って打ち切る。
 HPC4_NET_UP_DEPTH="${HPC4_NET_UP_DEPTH:-0}"
@@ -43,7 +44,7 @@ if (( HPC4_NET_UP_DEPTH > 4 )); then
     exit 5
 fi
 
-# --- (0a) NordVPN helper の kill-switch (block drop all) を proactive に flush ---
+# --- (0a) NordVPN helper の kill-switch を proactive に flush ----------------
 # NordVPN helper は VPN 接続時に pf main ruleset へ `block drop all` 系の
 # kill-switch rule を入れる。これは com.apple/* anchor 配下より先に評価される
 # ため、anchor で `pass quick` を入れても貫通できない（過去の `com.apple/hpc4`
@@ -55,10 +56,15 @@ fi
 # AI 実行（sudo 不可）では skip。L4 で塞がれた時に reactive で user に案内する
 # 後段ロジックが受ける。user terminal (net-up-local.sh) のときだけ proactive 動作。
 if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-    if sudo_cmd pfctl -s rules 2>/dev/null | grep -q '^block drop all'; then
+    if sudo -n pfctl -s rules 2>/dev/null | grep -Eq '^block[[:space:]]+(drop|return)?([[:space:]]+quick)?[[:space:]]+(all|in|out)'; then
         log "pf main ruleset に kill-switch (block drop all) を検出。flush します。"
-        sudo_cmd pfctl -F rules >/dev/null 2>&1 || warn "pf rules flush に失敗（permission?）"
-        ok "pf main rules flush 完了（NordVPN tunnel・Claude 経路は無傷）"
+        if sudo_cmd pfctl -F rules >/dev/null; then
+            ok "pf main rules flush 完了（NordVPN tunnel・Claude 経路は無傷）"
+            export HPC4_PF_FLUSH_ATTEMPTED=1
+        else
+            err "pf main rules flush を自動実行できませんでした。sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
+            exit 2
+        fi
     fi
 fi
 
@@ -153,29 +159,42 @@ if tcp22_ok 5; then
 fi
 
 # --- (5) L4 で塞がれている -----------------------------------------------
-# 経路は HKUST 圏内 IF に出ているのに TCP 22 が通らない。最有力は NordVPN 等の
-# helper が pf main ruleset に書き込む kill-switch 系 rule (`block drop all`
-# + 自身の helper だけ pass)。これは com.apple/* anchor より先に評価されるので、
-# skill 側から com.apple/hpc4 anchor に pass quick を入れる戦略は届かない（過去
-# 実装で確認済み、撤去済み）。唯一の対処は user に main rules ごと flush して
-# もらうこと。flush 後 NordVPN tunnel と Claude 経路はそのまま生き、HPC4 が通る。
+# 経路は HKUST 圏内 IF に出ているのに TCP 22 が通らない。user Terminal helper
+# ならこの時点で「HKUST IF はある」「routing は正しい」ことが確定しているので、
+# 最有力の pf main ruleset kill-switch とみなし、1 回だけ自動 flush して再判定する。
+# AI 実行では sudo prompt を扱えないため、自動実行せず helper の案内で止める。
+if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && "${HPC4_PF_FLUSH_ATTEMPTED:-0}" != "1" ]]; then
+    log "L3 は ${egress} で正しいため、pf main ruleset を flush して TCP 22 を再判定します"
+    if sudo_cmd pfctl -F rules >/dev/null; then
+        ok "pf main rules flush 完了。再判定します。"
+        export HPC4_PF_FLUSH_ATTEMPTED=1
+        exec bash "$0"
+    fi
+    err "pf main rules flush を自動実行できませんでした。sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
+    exit 2
+fi
+
+if [[ "${HPC4_PF_FLUSH_ATTEMPTED:-0}" == "1" ]]; then
+    err "pf main ruleset を flush しましたが、TCP 22 はまだ通りません。"
+    err "L3 経路は ${egress} で正しいため、残る候補は pf 以外の L4 / VPN tunnel 側です。"
+    err ""
+    err "考えられる原因："
+    err ""
+    err "  B. NEPacketTunnelProvider (\`includeAllNetworks=true\`) によるシステム強制 tunnel"
+    err "     → user space からは override 不可。当該 VPN クライアントの設定を見直してください。"
+    err ""
+    err "  C. HKUST tunnel (Ivanti) の認証/再接続が未完了"
+    err "     → Ivanti Secure Access の接続状態と認証完了を確認してください。"
+    exit 2
+fi
+
 err "L3 経路は ${egress} で正しいですが TCP 22 が通りません。L4 (firewall / packet filter) 側で塞がれています。"
 err ""
-err "最有力の原因と対処："
-err ""
-err "  A. pf main ruleset に kill-switch 系 rule (block drop all) が居る"
-err "     （NordVPN 等の helper が VPN 接続時に書き込むタイプ。anchor より先に"
-err "      評価されるので skill 側からは貫通不可）"
-err "     → 別ターミナルで以下を 1 行実行してください："
-err "         sudo pfctl -F rules"
-err "       これで main ruleset が flush され、HPC4 への traffic が通ります。"
-err "       NordVPN tunnel (utun7 等) と Claude 経路はそのまま生きます。"
-err "       NordVPN を Disconnect/Connect すると rules が再注入されるので、"
-err "       その都度 flush してください。"
-err ""
-err "  B. NEPacketTunnelProvider (\`includeAllNetworks=true\`) によるシステム強制 tunnel"
-err "     → user space からは override 不可。当該 VPN クライアントの設定を見直してください。"
-err ""
-err "  C. HKUST tunnel (Ivanti) の認証/再接続が未完了"
-err "     → Ivanti Secure Access の接続状態と認証完了を確認してください。"
+if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
+    err "net-up-local.sh は pf main ruleset flush を自動実行する設計ですが、この実行では完了できませんでした。"
+    err "sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
+else
+    err "AI 実行では sudo prompt を扱えません。別ターミナルで helper を実行してください："
+    err "    bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
+fi
 exit 2

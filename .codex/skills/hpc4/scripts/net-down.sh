@@ -2,7 +2,7 @@
 # net-up.sh の手順で入った host route と ControlMaster ソケットを取り外す。
 # 通常は不要（Mac 再起動で host route は消える）。トラブル切り分け用。
 #
-# AI 実行では sudo しない。user が net-down-local.sh を自分の Terminal で
+# Codex 実行では sudo しない。user が net-down-local.sh を自分の Terminal で
 # 実行した時だけ route / pf の削除を行う。
 
 set -u

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mechanically write out user.conf.local.
 #   ./write-user-conf.sh <username> [account] [partition] [identity_file]
-# Overwrites any existing file. Normally invoked by Claude inside the setup flow.
+# Overwrites any existing file. Normally invoked by Codex inside the setup flow.
 
 set -u
 source "$(dirname "$0")/common.sh"
