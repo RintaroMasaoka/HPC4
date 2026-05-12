@@ -44,13 +44,13 @@ if (( HPC4_NET_UP_DEPTH > 4 )); then
     exit 5
 fi
 
-# --- (0a) NordVPN helper の kill-switch を proactive に flush ----------------
-# NordVPN helper は VPN 接続時に pf main ruleset へ `block drop all` 系の
+# --- (0a) VPN client の kill-switch を proactive に flush --------------------
+# 一部 VPN client は接続時に pf main ruleset へ `block drop all` 系の
 # kill-switch rule を入れる。これは com.apple/* anchor 配下より先に評価される
 # ため、anchor で `pass quick` を入れても貫通できない（過去の `com.apple/hpc4`
 # anchor 戦略は撤去済み）。唯一の対処は main rules ごと flush すること。
-# NordVPN tunnel (utun7) と Claude 経路は kernel routing で維持されるので無害。
-# NordVPN を Disconnect/Connect / Pause/Resume すると rules は再注入されるので、
+# VPN tunnel と Claude 経路は kernel routing で維持されるので無害。
+# VPN client を reconnect / pause-resume すると rules は再注入されることがあるので、
 # その都度 net-up-local.sh を再実行すれば再度 flush される。
 #
 # AI 実行（sudo 不可）では skip。L4 で塞がれた時に reactive で user に案内する
@@ -59,7 +59,7 @@ if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
     if sudo -n pfctl -s rules 2>/dev/null | grep -Eq '^block[[:space:]]+(drop|return)?([[:space:]]+quick)?[[:space:]]+(all|in|out)'; then
         log "pf main ruleset に kill-switch (block drop all) を検出。flush します。"
         if sudo_cmd pfctl -F rules >/dev/null; then
-            ok "pf main rules flush 完了（NordVPN tunnel・Claude 経路は無傷）"
+            ok "pf main rules flush 完了（VPN tunnel・Claude 経路は無傷）"
             export HPC4_PF_FLUSH_ATTEMPTED=1
         else
             err "pf main rules flush を自動実行できませんでした。sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
@@ -69,7 +69,7 @@ if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
 fi
 
 # --- (0) TCP fast-path：TCP 22 が既に通れば routing は全て正常 ---------------
-# eduroam NAT (10.79/16) + NordVPN 同居など、IF 判定では捕捉しにくい構成でも
+# eduroam NAT (10.79/16) + 別 VPN 同居など、IF 判定では捕捉しにくい構成でも
 # 実際に届いているなら診断をスキップして即 OK を返す。
 if tcp22_ok 3; then
     ok "TCP 22 到達 OK（routing 判定スキップ）"
@@ -77,12 +77,12 @@ if tcp22_ok 3; then
 fi
 
 # --- (0.5) sandbox / permission 制限：route socket が塞がれているか ----------
-# Codex sandbox や非 escalated 環境では route get / ping / 一部 TCP probe が
+# AI sandbox や permission 制限のある環境では route get / ping / 一部 TCP probe が
 # 軒並み false negative になり、実際は届いているのに「経路欠落」と誤診断される。
 # この状態で sudo route add を促すと、(a) 操作自体が permission 拒否で失敗し、
 # (b) 実際には不要な route 追加を user に促してしまう。判定不能で即時終了する。
 if route_probe_restricted; then
-    err "route socket が制限されています（Codex sandbox / 非 escalated 環境の特徴）。"
+    err "route socket が制限されています（AI sandbox / permission 制限環境の特徴）。"
     err "この状態では route get / ping / 一部 TCP probe が実体と無関係に false negative"
     err "を返すため、経路診断ができません。実際には HPC4 に届いている可能性があります。"
     err ""
@@ -94,7 +94,7 @@ fi
 # --- (1) HKUST 圏内能力の有無を判定 ----------------------------------------
 # (a) 143.89/16 IP を直接持つ IF
 # (b) eduroam NAT (10.79/16) 経由で 143.89.x への route が既存
-# (c) route get が physical IF → private IP の場合（NordVPN なし）
+# (c) route get が physical IF → private IP の場合（別 VPN が default route を握っていない場合）
 # (d) 10.79/16 IP を持つ物理 IF（HKUST eduroam NAT の特徴）
 hkust_iface="$(find_hkust_iface)"
 

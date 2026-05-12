@@ -2,7 +2,7 @@
 
 **English** | [日本語](README.ja.md)
 
-A Claude Code / Codex Desktop skill that automates SSH / command execution / file transfer to the HKUST HPC4 cluster, including all the network-routing fiddly bits. You invoke it the same way regardless of where the Mac is — on-campus, off-campus with the HKUST SSL VPN, or with a full VPN like NordVPN running alongside it.
+A Claude Code / Codex Desktop skill that automates SSH / command execution / file transfer to the HKUST HPC4 cluster, including all the network-routing fiddly bits. You invoke it the same way regardless of where the Mac is — on-campus, off-campus with the HKUST SSL VPN, or with another full VPN running alongside it.
 
 ## Background
 
@@ -249,7 +249,7 @@ No external input is interpolated into the sudo commands, so there's no shell-in
 The skill does not identify VPN products. It asks the kernel "which interface egresses HPC4 (143.89.184.3)?" and decides solely based on whether that interface holds a 143.89/16 IP:
 
 - At least one interface reaches HKUST (en0 directly on 143.89/16, or Ivanti utun with a 143.89.\* IP) → pin a host route for HPC4 to that interface. Even if another VPN later changes the default, longest-prefix-match keeps HPC4 routed correctly.
-- No interface reaches HKUST (NordVPN owning the default, or fully off-campus) → pinning would be useless; bail and tell the user to start Ivanti / switch to a campus network.
+- No interface reaches HKUST (another VPN owning the default, or fully off-campus) → pinning would be useless; bail and tell the user to start Ivanti / switch to a campus network.
 - Routing OK but TCP 22 fails (VPN client kill-switch / NEPacketTunnelProvider blocking at L4) → print terminal-readable steps for whitelisting 143.89.184.3 in the VPN client GUI.
 
 For per-layer behavior and the gotchas, see the "How the network layer works" and "macOS-side connection traps" sections of [SKILL.md](.claude/skills/hpc4/SKILL.md).

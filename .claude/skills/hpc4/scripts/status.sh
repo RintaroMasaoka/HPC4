@@ -15,7 +15,7 @@ source "$(dirname "$0")/common.sh"
 
 printf "## HPC4 接続状態 (%s)\n" "$(date '+%F %T')"
 
-# Codex sandbox / 非 escalated 環境では route socket / ICMP / TCP probe が
+# AI sandbox / permission 制限環境では route socket / ICMP / TCP probe が
 # 軒並み false negative になる。この flag が立つ場合、route 系の判定失敗は
 # [ng] ではなく [?] (sandbox restricted) として表示し、user に「不要な
 # sudo route add が必要」と誤認させない。
@@ -33,7 +33,7 @@ else
 fi
 
 if (( restricted )); then
-    printf "  [?]    route socket 制限を検出（Codex sandbox / 非 escalated 環境の特徴）\n"
+    printf "  [?]    route socket 制限を検出（AI sandbox / permission 制限環境の特徴）\n"
     printf "         経路・疎通・SSH 認証の判定は false negative になり得るため [?] で表示します\n"
     printf "         実際は HPC4 に届いている可能性があります。確実な判定は別ターミナルから\n"
 fi

@@ -49,7 +49,7 @@ sudo_cmd() {
         return $?
     fi
 
-    if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && -t 0 && -t 1 ]]; then
+    if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && -t 0 ]]; then
         local tmp status line
         tmp="$(mktemp -t hpc4-sudo.XXXXXX)" || {
             err "sudo 実行用の一時ファイルを作成できませんでした。"
@@ -120,7 +120,7 @@ iface_is_hkust_capable() {
 #       (eduroam NAT + 既存 host route) — ただし stale 経路で誤検出しないよう
 #       iface_is_hkust_capable で再検証する
 #   (4) route get が physical IF を返し、それが iface_is_hkust_capable を満たす
-#       (NordVPN 等が default を奪っていない場合)
+#       (別 VPN が default route を握っていない場合)
 #
 # 重要: Path 3/4 は heuristic なので、必ず iface_is_hkust_capable で確証を取る。
 # これを怠ると過去 session の stale な netstat エントリ（例: 以前 HKUST eduroam
@@ -229,7 +229,7 @@ ping_ok() {
 }
 
 # route socket が permission で塞がれているか。
-# Codex sandbox / 非 escalated 環境では `route -n get` / `ping` /
+# AI sandbox / permission 制限環境では `route -n get` / `ping` /
 # 一部 TCP probe が "Operation not permitted" を返し、実体は届いていても
 # 「経路欠落」と誤診断される。この helper はその false negative の入口を捕える。
 # 真なら呼出側は route 操作系（sudo route add 等）を促してはいけない。
