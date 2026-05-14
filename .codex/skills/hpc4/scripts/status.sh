@@ -101,8 +101,9 @@ if [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "your_itso_username" ]]; then
     elif (( restricted )); then
         printf "  [?]    passwordless SSH：判定不能（sandbox で BatchMode SSH が制限されている可能性）\n"
     else
-        printf "  [ng]   passwordless SSH 未成立（公開鍵の登録が必要）\n"
-        printf "         → ssh-copy-id -i ~/.ssh/id_ed25519.pub %s@%s （別ターミナルで一度だけ）\n" "$HPC4_USER" "$HPC4_HOST"
+        printf "  [ng]   passwordless SSH 未成立（SSH agent 未登録または公開鍵未登録）\n"
+        printf "         → bash \"%s/scripts/net-up-local.sh\" で候補鍵の選択と ssh-add を実行\n" "$SKILL_DIR"
+        printf "         → 公開鍵未登録なら net-up-local.sh が選択鍵に対応する ssh-copy-id を案内\n"
     fi
 
     if cm_alive; then
