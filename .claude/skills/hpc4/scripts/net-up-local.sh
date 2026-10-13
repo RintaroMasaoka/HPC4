@@ -1,9 +1,9 @@
 #!/bin/bash
-# user の Terminal 専用 entry point。
+# Entry point for the user's own Terminal.
 #
-# Claude/Codex 等の AI 実行からは sudo password / Touch ID を扱わない。
-# route / pf 変更や SSH key passphrase が必要な時だけ、この wrapper を
-# user が自分の Terminal で実行する。
+# AI execution (Claude / Codex) does not handle sudo password / Touch ID prompts.
+# Use this wrapper for route / pf changes or SSH key passphrases;
+# the user runs it in their own Terminal.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -69,12 +69,12 @@ choose_identity_file() {
             HPC4_SELECTED_IDENTITY_FILE="$configured"
             return 0
         fi
-        err "HPC4_IDENTITY_FILE が設定されていますが、秘密鍵が見つかりません: ${configured}"
+        err "HPC4_IDENTITY_FILE is set, but the private key was not found: ${configured}"
         return 2
     fi
 
     if [[ ! -t 0 || ! -t 1 ]]; then
-        err "HPC4_IDENTITY_FILE が未設定です。対話ターミナルで鍵を選択してから再実行してください。"
+        err "HPC4_IDENTITY_FILE is not set. Select a key in an interactive terminal, then retry."
         return 2
     fi
 
@@ -88,47 +88,47 @@ choose_identity_file() {
     done
 
     if (( ${#identity_candidates[@]} == 0 )); then
-        err "HPC4_IDENTITY_FILE が未設定で、~/.ssh/ に候補鍵が見つかりません。"
-        err "使用する秘密鍵を user.conf.local の HPC4_IDENTITY_FILE に設定するか、新しい鍵を作成してください。"
+        err "HPC4_IDENTITY_FILE is not set, and no candidate keys were found in ~/.ssh/."
+        err "Set HPC4_IDENTITY_FILE in user.conf.local to your private key, or create a new key."
         return 2
     fi
 
-    log "HPC4_IDENTITY_FILE が未設定です。使用する SSH 秘密鍵を選択してください:"
+    log "HPC4_IDENTITY_FILE is not set. Select the SSH private key to use:"
     i=1
     for candidate in "${identity_candidates[@]}"; do
         printf "  %d) %s" "$i" "$(display_path "$candidate")"
-        [[ -f "${candidate}.pub" ]] || printf "  （対応する .pub なし）"
+        [[ -f "${candidate}.pub" ]] || printf "  (no matching .pub file)"
         printf "\n"
         i=$((i + 1))
     done
-    printf "  q) キャンセル\n"
+    printf "  q) Cancel\n"
 
     while :; do
-        printf "[hpc4] 鍵番号: "
+        printf "[hpc4] Key number: "
         IFS= read -r choice
         case "$choice" in
             q|Q) return 2 ;;
-            ''|*[!0-9]*) warn "番号を入力してください。" ;;
+            ''|*[!0-9]*) warn "Enter a number." ;;
             *)
                 if (( choice >= 1 && choice <= ${#identity_candidates[@]} )); then
                     selected="${identity_candidates[$((choice - 1))]}"
                     break
                 fi
-                warn "範囲外の番号です。"
+                warn "Number out of range."
                 ;;
         esac
     done
 
-    printf "[hpc4] この鍵を HPC4_IDENTITY_FILE に保存しますか？ [Y/n] "
+    printf "[hpc4] Save this key as HPC4_IDENTITY_FILE? [Y/n] "
     IFS= read -r persist
     case "$persist" in
         n|N)
             ;;
         *)
             if save_identity_file "$selected"; then
-                ok "HPC4_IDENTITY_FILE を保存しました: $(display_path "$selected")"
+                ok "Saved HPC4_IDENTITY_FILE: $(display_path "$selected")"
             else
-                warn "HPC4_IDENTITY_FILE の保存に失敗しました。この実行では選択した鍵を使います。"
+                warn "Could not save HPC4_IDENTITY_FILE. Using the selected key for this run."
             fi
             ;;
     esac
@@ -138,12 +138,12 @@ choose_identity_file() {
 
 prepare_passwordless_ssh() {
     if [[ -z "${HPC4_USER:-}" ]] || [[ "$HPC4_USER" == "your_itso_username" ]]; then
-        log "user.conf.local が未設定のため、SSH 認証準備はスキップします。"
+        log "user.conf.local is not configured. Skipping SSH authentication setup."
         return 0
     fi
 
     if ssh_passwordless_ok; then
-        ok "passwordless SSH 成立"
+        ok "Passwordless SSH is ready."
         return 0
     fi
 
@@ -151,44 +151,44 @@ prepare_passwordless_ssh() {
     local identity_file="$HPC4_SELECTED_IDENTITY_FILE"
 
     if [[ -f "$identity_file" ]]; then
-        log "passwordless SSH 未成立。SSH agent に鍵を追加します（passphrase が必要な場合があります）"
+        log "Passwordless SSH is not ready. Adding the key to the SSH agent (a passphrase may be required)."
         if ssh-add "$identity_file"; then
             HPC4_IDENTITY_FILE="$identity_file"
             build_ssh_opts
             if ssh_passwordless_ok; then
-                ok "passwordless SSH 成立（ssh-add 後）"
+                ok "Passwordless SSH is ready (after ssh-add)."
                 return 0
             fi
         else
-            err "ssh-add に失敗しました。passphrase 入力を完了してから再実行してください。"
+            err "ssh-add failed. Complete passphrase entry, then retry."
             return 2
         fi
     else
-        warn "SSH 秘密鍵が見つかりません: ${identity_file}"
+        warn "SSH private key not found: ${identity_file}"
     fi
 
-    err "passwordless SSH がまだ成立していません。公開鍵登録が必要な可能性があります。"
+    err "Passwordless SSH is still not ready. Public-key registration may be required."
     if [[ -f "${identity_file}.pub" ]]; then
         local pub_q
         printf -v pub_q '%q' "${identity_file}.pub"
-        err "公開鍵未登録なら、別ターミナルで一度だけ実行してください:"
+        err "If the public key is not registered, run this once in a separate terminal:"
         err "  ssh-copy-id -i ${pub_q} ${HPC4_USER}@${HPC4_HOST}"
     else
-        err "選択した秘密鍵に対応する公開鍵がありません: $(display_path "${identity_file}.pub")"
-        err "公開鍵を作成してから ssh-copy-id してください。"
+        err "No public key matches the selected private key: $(display_path "${identity_file}.pub")"
+        err "Create the public key, then run ssh-copy-id."
     fi
     return 2
 }
 
 if [[ "$(id -u)" -ne 0 ]]; then
     if [[ ! -t 0 || ! -t 1 ]]; then
-        printf "[hpc4][err] net-up-local.sh は sudo 認証や SSH key passphrase を扱うため、対話ターミナルから実行してください。\n" >&2
+        printf "[hpc4][err] Run net-up-local.sh in an interactive terminal to handle sudo authentication and SSH key passphrases.\n" >&2
         exit 2
     fi
 
-    printf "[hpc4] sudo 認証を確認します（password / Touch ID が必要な場合があります）\n"
+    printf "[hpc4] Checking sudo authentication (password / Touch ID may be required).\n"
     if ! sudo -v; then
-        printf "[hpc4][err] sudo 認証に失敗しました。認証を完了してから再実行してください。\n" >&2
+        printf "[hpc4][err] sudo authentication failed. Complete authentication, then retry.\n" >&2
         exit 2
     fi
 fi

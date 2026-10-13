@@ -1,5 +1,5 @@
 #!/bin/bash
-# user の Terminal 専用 teardown entry point。
+# Teardown entry point for the user's own Terminal.
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

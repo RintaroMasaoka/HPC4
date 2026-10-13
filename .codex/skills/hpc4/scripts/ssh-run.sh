@@ -1,8 +1,8 @@
 #!/bin/bash
-# HPC4 上で任意のコマンドを実行する。
+# Execute an arbitrary command on HPC4.
 #   ./ssh-run.sh "<command>"
-# 経路が未整備なら net-up.sh を呼んで HPC4 host route を pin する。
-# 認証は passwordless SSH（要 setup 済）。ControlMaster で 2 回目以降は即レス。
+# Execute commands on HPC4 using an already configured connection.
+# Requires passwordless SSH setup. ControlMaster makes subsequent calls immediate.
 
 set -u
 source "$(dirname "$0")/common.sh"
@@ -13,17 +13,18 @@ if [[ $# -lt 1 ]]; then
     exit 2
 fi
 
-# ネットワーク層が未整備なら整備（既に届くならスキップ）
-# ICMP は eduroam でブロックされる場合があるため TCP 22 で到達確認する。
-# route socket が sandbox で制限されている場合は TCP probe が false negative
-# になり得るので、net-up.sh を呼ばず SSH を直接試行する（SSH 自体が成功すれば
-# 実体としては届いている）。
+# If networking is not ready, direct the user to the setup helper.
+# Check reachability with TCP 22; eduroam may block ICMP.
+# When the sandbox restricts route sockets, TCP probes may return false negatives.
+# Attempt SSH directly without suggesting setup (successful SSH confirms
+# actual reachability).
 if ! tcp22_ok 3; then
     if route_probe_restricted; then
-        log "route probe 制限を検出。net-up.sh をスキップして SSH を直接試行します"
+        log "Detected restricted route probes. Attempting SSH directly."
     else
-        log "経路未整備。net-up.sh を実行"
-        bash "$(dirname "$0")/net-up.sh" || exit $?
+        err "TCP 22 is unreachable. Run setup / recovery once in an interactive terminal:"
+        err "  bash \"${SKILL_DIR}/scripts/setup-local.sh\""
+        exit 3
     fi
 fi
 

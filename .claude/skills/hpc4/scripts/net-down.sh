@@ -1,9 +1,9 @@
 #!/bin/bash
-# net-up.sh の手順で入った host route と ControlMaster ソケットを取り外す。
-# 通常は不要（Mac 再起動で host route は消える）。トラブル切り分け用。
+# Remove the host route installed by net-up.sh and close ControlMaster sockets.
+# Usually unnecessary: rebooting the Mac clears host routes. Used for troubleshooting.
 #
-# AI 実行では sudo しない。user が net-down-local.sh を自分の Terminal で
-# 実行した時だけ route / pf の削除を行う。
+# Do not use sudo from AI execution. Only remove routes / pf state when the user
+# runs net-down-local.sh in their own Terminal.
 
 set -u
 source "$(dirname "$0")/common.sh"
@@ -11,20 +11,20 @@ source "$(dirname "$0")/common.sh"
 iface="$(current_hpc4_iface)"
 if [[ -n "$iface" ]]; then
     if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-        log "HPC4 host route (${iface}) を削除します"
-        sudo_cmd route -n delete -host "$HPC4_IP" 2>/dev/null || warn "route 削除に失敗"
+        log "Deleting HPC4 host route (${iface})."
+        sudo_cmd route -n delete -host "$HPC4_IP" 2>/dev/null || warn "Failed to delete route."
     else
-        log "HPC4 host route が ${iface} に固定されています。削除には sudo が必要です。"
-        log "別ターミナルで helper を実行してください："
+        log "HPC4 host route is pinned to ${iface}. Deleting it requires sudo."
+        log "Run the helper in a separate terminal:"
         log "    bash \"${SKILL_DIR}/scripts/net-down-local.sh\""
     fi
 else
-    log "HPC4 host route は存在しません"
+    log "No HPC4 host route exists."
 fi
 
-# ControlMaster の close は sudo 不要
+# Closing ControlMaster does not require sudo.
 if [[ -n "${HPC4_USER:-}" ]] && [[ "$HPC4_USER" != "your_itso_username" ]] && cm_alive; then
-    log "ControlMaster ソケットを close"
+    log "Closing ControlMaster socket."
     ssh -F "$SSH_CONFIG" -l "$HPC4_USER" -O exit hpc4 2>/dev/null || true
-    ok "ControlMaster ソケット closed"
+    ok "ControlMaster socket closed."
 fi

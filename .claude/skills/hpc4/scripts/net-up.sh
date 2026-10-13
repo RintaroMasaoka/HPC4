@@ -1,200 +1,200 @@
 #!/bin/bash
-# HPC4 (143.89.184.3) への到達経路を診断する。
+# Diagnose the route to HPC4 (143.89.184.3).
 #
-# 設計：
-#   - AI 実行では sudo を呼ばない（user 委任が基本ルール）。
-#   - user が net-up-local.sh を自分の Terminal で実行した時だけ sudo を許可する。
-#   - 触る対象を案内するのは HPC4 IP の host route ただ 1 つ。
-#   - 既存 pin が HKUST 圏外を指している stale 状態と、そもそも HKUST 圏外に居る
-#     状態を **別の error path で** 報告する（昔は両方とも「圏外」に合流していた）。
-#   - user Terminal helper で L3 が正しいのに L4 だけ塞がれている時は、pf main
-#     ruleset を 1 回だけ flush して再判定する。AI 実行では sudo せず案内で止める。
+# Design:
+#   - Do not use sudo from AI execution; delegate to the user.
+#   - Allow sudo only when the user runs net-up-local.sh in their own Terminal.
+#   - Route-change guidance is limited to the single HPC4 host route.
+#   - Report a stale pin pointing outside HKUST separately from the absence
+#     of any HKUST-capable interface (these formerly shared one error path).
+#   - In the user's Terminal helper, if L3 is correct but L4 is blocked, flush
+#     the pf main ruleset once and recheck. AI execution stops with helper guidance.
 #
 # Exit code:
-#   0  経路 OK + TCP 22 到達 OK
-#   1  HKUST 圏内 IF が一つもない（network 状態を直す必要あり）
-#   2  L3 経路は OK だが TCP 22 不通（L4 遮断）
-#   3  user Terminal helper による sudo 操作が必要
-#   4  route socket が sandbox / permission で制限されており判定不能
-#   5  pin の add/delete を繰り返す発振状態（find_hkust_iface と
-#      iface_is_hkust_capable の判定が食い違っている）を検出して中断
+#   0  Route OK and TCP 22 reachable.
+#   1  No HKUST-capable interface (network connection must be fixed).
+#   2  L3 route OK but TCP 22 unreachable (L4 block).
+#   3  sudo operation required through the user's Terminal helper.
+#   4  Route socket restricted by sandbox / permissions; result unknown.
+#   5  Aborted a pin add/delete loop caused by disagreement between
+#      find_hkust_iface and iface_is_hkust_capable.
 
 set -u
 source "$(dirname "$0")/common.sh"
 
-# --- (-1) 再帰深度ガード -----------------------------------------------------
-# net-up.sh は stale pin 削除 / pin 追加 / pf main ruleset flush の後に exec bash "$0"
-# で自分を再起動する。判定関数同士が食い違っていると無限ループに入って sudo
-# プロンプトを延々と再表示してしまうので、深度を環境変数で持ち回って打ち切る。
+# --- (-1) Recursion-depth guard --------------------------------------------
+# net-up.sh restarts itself with exec bash "$0" after deleting a stale pin,
+# adding a pin, or flushing pf main rules. Disagreeing checks can loop forever
+# and repeatedly prompt for sudo. Carry depth in an environment variable to stop.
 HPC4_NET_UP_DEPTH="${HPC4_NET_UP_DEPTH:-0}"
 HPC4_NET_UP_DEPTH=$((HPC4_NET_UP_DEPTH + 1))
 export HPC4_NET_UP_DEPTH
 if (( HPC4_NET_UP_DEPTH > 4 )); then
-    err "net-up.sh が ${HPC4_NET_UP_DEPTH} 回連続で再判定されました（pin の add/delete 発振）。"
-    err "find_hkust_iface() と iface_is_hkust_capable() の判定が食い違っている可能性が高いです。"
+    err "net-up.sh has retried ${HPC4_NET_UP_DEPTH} times (host pin add/delete loop)."
+    err "find_hkust_iface() and iface_is_hkust_capable() likely disagree."
     err ""
-    err "現状："
+    err "Current state:"
     err "  find_hkust_iface     : $(find_hkust_iface)"
     err "  current_hpc4_iface   : $(current_hpc4_iface)"
     err "  en0 IPv4             : $(ifconfig en0 2>/dev/null | awk '/inet /{print $2; exit}')"
     err "  default route        : $(netstat -rn -f inet 2>/dev/null | awk '$1=="default"{print $NF, "via", $2; exit}')"
     err ""
-    err "回避策：bash \"${SKILL_DIR}/scripts/net-down.sh\" で host pin を一度削除し、"
-    err "        ネットワーク状態（HKUST eduroam か / Ivanti が起動しているか）を見直してください。"
+    err "Workaround: remove the host pin once with bash \"${SKILL_DIR}/scripts/net-down.sh\","
+    err "            then check your network (HKUST eduroam / Ivanti connection)."
     exit 5
 fi
 
-# --- (0a) VPN client の kill-switch を proactive に flush --------------------
-# 一部 VPN client は接続時に pf main ruleset へ `block drop all` 系の
-# kill-switch rule を入れる。これは com.apple/* anchor 配下より先に評価される
-# ため、anchor で `pass quick` を入れても貫通できない（過去の `com.apple/hpc4`
-# anchor 戦略は撤去済み）。唯一の対処は main rules ごと flush すること。
-# VPN tunnel と Claude 経路は kernel routing で維持されるので無害。
-# VPN client を reconnect / pause-resume すると rules は再注入されることがあるので、
-# その都度 net-up-local.sh を再実行すれば再度 flush される。
+# --- (0a) Proactively flush VPN-client kill-switch rules ---------------------
+# Some VPN clients install `block drop all` kill-switch rules in the pf main
+# ruleset at connection time. These are evaluated before com.apple/* anchors,
+# so an anchor's `pass quick` cannot bypass them. The previous com.apple/hpc4
+# anchor strategy was removed; the remedy is flushing the main ruleset.
+# VPN tunnels and Claude traffic routes remain in the kernel routing table.
+# VPN reconnect / pause-resume may reinstall the rules. Run net-up-local.sh
+# again when that happens to flush them again.
 #
-# AI 実行（sudo 不可）では skip。L4 で塞がれた時に reactive で user に案内する
-# 後段ロジックが受ける。user terminal (net-up-local.sh) のときだけ proactive 動作。
+# Skip during AI execution (no sudo); the later L4-block branch provides
+# helper guidance. Proactive flushing runs only in the user's Terminal helper.
 if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
     if sudo -n pfctl -s rules 2>/dev/null | grep -Eq '^block[[:space:]]+(drop|return)?([[:space:]]+quick)?[[:space:]]+(all|in|out)'; then
-        log "pf main ruleset に kill-switch (block drop all) を検出。flush します。"
+        log "Detected a kill switch (block drop all) in the pf main ruleset. Flushing rules."
         if sudo_cmd pfctl -F rules >/dev/null; then
-            ok "pf main rules flush 完了（VPN tunnel・Claude 経路は無傷）"
+            ok "Flushed pf main rules (VPN tunnel and Claude traffic routes are intact)."
             export HPC4_PF_FLUSH_ATTEMPTED=1
         else
-            err "pf main rules flush を自動実行できませんでした。sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
+            err "Could not flush pf main rules automatically. Rerun net-up-local.sh in an interactive terminal where sudo authentication can complete."
             exit 2
         fi
     fi
 fi
 
-# --- (0) TCP fast-path：TCP 22 が既に通れば routing は全て正常 ---------------
-# eduroam NAT (10.79/16) + 別 VPN 同居など、IF 判定では捕捉しにくい構成でも
-# 実際に届いているなら診断をスキップして即 OK を返す。
+# --- (0) TCP fast path: if TCP 22 is reachable, skip routing diagnostics ------
+# Even configurations difficult to detect from interfaces (eduroam NAT 10.79/16
+# plus another VPN) need no further diagnostics if HPC4 is actually reachable.
 if tcp22_ok 3; then
-    ok "TCP 22 到達 OK（routing 判定スキップ）"
+    ok "TCP 22 reachable (skipping routing checks)."
     exit 0
 fi
 
-# --- (0.5) sandbox / permission 制限：route socket が塞がれているか ----------
-# AI sandbox や permission 制限のある環境では route get / ping / 一部 TCP probe が
-# 軒並み false negative になり、実際は届いているのに「経路欠落」と誤診断される。
-# この状態で sudo route add を促すと、(a) 操作自体が permission 拒否で失敗し、
-# (b) 実際には不要な route 追加を user に促してしまう。判定不能で即時終了する。
+# --- (0.5) Sandbox / permissions: check route-socket restrictions ------------
+# In AI sandboxes / environments with permission restrictions, route get / ping /
+# some TCP probes return false negatives, misdiagnosing reachable HPC4 as a missing route.
+# Suggesting sudo route add here would (a) fail due to permissions and
+# (b) request an unnecessary route change. Exit immediately with unknown status.
 if route_probe_restricted; then
-    err "route socket が制限されています（AI sandbox / permission 制限環境の特徴）。"
-    err "この状態では route get / ping / 一部 TCP probe が実体と無関係に false negative"
-    err "を返すため、経路診断ができません。実際には HPC4 に届いている可能性があります。"
+    err "Route-socket access is restricted (typical of AI sandboxes / permission restrictions)."
+    err "route get / ping / some TCP probes may return false negatives in this environment."
+    err "Routing cannot be diagnosed reliably. HPC4 may actually be reachable."
     err ""
-    err "  → 別ターミナル（permission 制限のないシェル）で同じ script を再実行してください。"
-    err "    判定不能のまま sudo route add を勧めることはしません。"
+    err "  -> Rerun the same script in a separate terminal without permission restrictions."
+    err "     No sudo route add is recommended while the result is unknown."
     exit 4
 fi
 
-# --- (1) HKUST 圏内能力の有無を判定 ----------------------------------------
-# (a) 143.89/16 IP を直接持つ IF
-# (b) eduroam NAT (10.79/16) 経由で 143.89.x への route が既存
-# (c) route get が physical IF → private IP の場合（別 VPN が default route を握っていない場合）
-# (d) 10.79/16 IP を持つ物理 IF（HKUST eduroam NAT の特徴）
+# --- (1) Check HKUST capability --------------------------------------------
+# (a) An interface with a direct 143.89/16 address.
+# (b) An existing 143.89.x route through eduroam NAT (10.79/16).
+# (c) route get returns a physical interface with a private IP (no other VPN owns default).
+# (d) A physical interface with a 10.79/16 address (HKUST eduroam NAT).
 hkust_iface="$(find_hkust_iface)"
 
 if [[ -z "$hkust_iface" ]]; then
-    err "あなたの Mac には HKUST 到達能力を持つ IF が一つもありません。"
-    err "  → HKUST キャンパス内の eduroam (10.79/16 NAT) または HKUST 有線（オンキャンパスの場合）"
-    err "  → Ivanti Secure Access (HKUST SSL VPN) を起動（オフキャンパスの場合）"
+    err "Your Mac has no interface capable of reaching HKUST."
+    err "  -> On campus: connect to HKUST campus eduroam (10.79/16 NAT) or HKUST wired networking."
+    err "  -> Off campus: connect with Ivanti Secure Access (HKUST SSL VPN)."
     err ""
-    err "備考：eduroam は federated なので HKUST 以外（DT Hub 等の HKSTP 施設、他大学、空港）でも"
-    err "      同じ SSID で繋がりますが、HKUST 構成員向け eduroam でないと HPC4 に届きません。"
-    err "      詳細は .claude/skills/hpc4/policy.md。"
+    err "Note: eduroam is federated and shares its SSID outside HKUST (HKSTP facilities such as"
+    err "      DT Hub, other universities, airports). Those networks do not provide HKUST access."
+    err "      See .claude/skills/hpc4/policy.md for details."
     exit 1
 fi
 
-# --- (2) stale pin の検出 -------------------------------------------------
-# 既存の host pin が HKUST 圏外 IF を指しているなら、natural route を上書きする
-# 害悪な存在。delete を user に依頼する。
+# --- (2) Detect stale pins --------------------------------------------------
+# A host pin pointing to a non-HKUST interface overrides the natural route.
+# Ask the user to delete it.
 existing_pin="$(current_hpc4_iface)"
 
 if [[ -n "$existing_pin" ]] && ! iface_is_hkust_capable "$existing_pin"; then
     if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-        log "stale HPC4 host route (${existing_pin}) を削除します"
+        log "Deleting stale HPC4 host route (${existing_pin})."
         sudo_cmd route -n delete -host "$HPC4_IP" || exit $?
-        ok "stale route を削除しました。再判定します。"
+        ok "Deleted stale route. Checking again."
         exec bash "$0"
     fi
-    err "前回 set した HPC4 host route が ${existing_pin} (HKUST 圏外) を指したまま残っています。"
-    err "削除には sudo が必要です。別ターミナルで helper を実行してください："
+    err "The previous HPC4 host route still points to ${existing_pin} (outside HKUST)."
+    err "Deleting it requires sudo. Run the helper in a separate terminal:"
     err "    bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
     exit 3
 fi
 
-# --- (3) 自然な route が HKUST 圏内を経由するか ---------------------------
-# pin が無いか、pin が正しい場合、kernel は HKUST IF に流すはず。
-# それでも非 HKUST IF が選ばれている稀ケースは host pin で強制する必要がある。
+# --- (3) Check whether the natural route goes through HKUST -----------------
+# With no pin or a valid pin, the kernel should use the HKUST interface.
+# If it selects a non-HKUST interface instead, a host pin is needed.
 resolve="$(hpc4_route_resolve)"
 egress="$(printf '%s' "$resolve" | awk '{print $1}')"
 
 if [[ -z "$egress" ]] || ! iface_is_hkust_capable "$egress"; then
     if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-        log "HPC4 host route を ${hkust_iface} に固定します"
+        log "Pinning the HPC4 host route to ${hkust_iface}."
         hpc4_pin_route "$hkust_iface" || exit $?
-        ok "host route を追加しました。再判定します。"
+        ok "Added host route. Checking again."
         exec bash "$0"
     fi
-    err "HKUST 圏内 IF (${hkust_iface}) は存在しますが、kernel は HPC4 を別 IF (${egress:-なし}) に流しています。"
-    err "host pin には sudo が必要です。別ターミナルで helper を実行してください："
+    err "HKUST-capable interface (${hkust_iface}) exists, but the kernel routes HPC4 through another interface (${egress:-none})."
+    err "Pinning the host route requires sudo. Run the helper in a separate terminal:"
     err "    bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
     exit 3
 fi
 
-# --- (4) 経路 OK。TCP 22 疎通テスト --------------------------------------
+# --- (4) Route OK: test TCP 22 ---------------------------------------------
 if [[ -n "$existing_pin" ]]; then
-    ok "HPC4 経路 OK：${egress} 経由（host pin あり）"
+    ok "HPC4 route OK: via ${egress} (host pin present)."
 else
-    ok "HPC4 経路 OK：${egress} 経由（kernel の自然な longest-prefix-match）"
+    ok "HPC4 route OK: via ${egress} (kernel longest-prefix match)."
 fi
 
 if tcp22_ok 5; then
-    ok "TCP 22 到達 OK"
+    ok "TCP 22 reachable."
     exit 0
 fi
 
-# --- (5) L4 で塞がれている -----------------------------------------------
-# 経路は HKUST 圏内 IF に出ているのに TCP 22 が通らない。user Terminal helper
-# ならこの時点で「HKUST IF はある」「routing は正しい」ことが確定しているので、
-# 最有力の pf main ruleset kill-switch とみなし、1 回だけ自動 flush して再判定する。
-# AI 実行では sudo prompt を扱えないため、自動実行せず helper の案内で止める。
+# --- (5) L4 blocked --------------------------------------------------------
+# TCP 22 is unreachable despite egress through an HKUST-capable interface.
+# In the user's Terminal helper, HKUST capability and correct L3 routing are
+# established: treat a pf main-ruleset kill switch as most likely, flush once, and recheck.
+# AI execution cannot handle sudo prompts; stop with helper guidance instead.
 if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && "${HPC4_PF_FLUSH_ATTEMPTED:-0}" != "1" ]]; then
-    log "L3 は ${egress} で正しいため、pf main ruleset を flush して TCP 22 を再判定します"
+    log "L3 routing via ${egress} is correct. Flushing pf main rules and rechecking TCP 22."
     if sudo_cmd pfctl -F rules >/dev/null; then
-        ok "pf main rules flush 完了。再判定します。"
+        ok "Flushed pf main rules. Checking again."
         export HPC4_PF_FLUSH_ATTEMPTED=1
         exec bash "$0"
     fi
-    err "pf main rules flush を自動実行できませんでした。sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
+    err "Could not flush pf main rules automatically. Rerun net-up-local.sh in an interactive terminal where sudo authentication can complete."
     exit 2
 fi
 
 if [[ "${HPC4_PF_FLUSH_ATTEMPTED:-0}" == "1" ]]; then
-    err "pf main ruleset を flush しましたが、TCP 22 はまだ通りません。"
-    err "L3 経路は ${egress} で正しいため、残る候補は pf 以外の L4 / VPN tunnel 側です。"
+    err "Flushed the pf main ruleset, but TCP 22 is still unreachable."
+    err "L3 routing via ${egress} is correct; remaining candidates are other L4 filters / the VPN tunnel."
     err ""
-    err "考えられる原因："
+    err "Possible causes:"
     err ""
-    err "  B. NEPacketTunnelProvider (\`includeAllNetworks=true\`) によるシステム強制 tunnel"
-    err "     → user space からは override 不可。当該 VPN クライアントの設定を見直してください。"
+    err "  B. System-enforced tunnel via NEPacketTunnelProvider (\`includeAllNetworks=true\`)."
+    err "     -> Cannot override from user space. Check the relevant VPN client's settings."
     err ""
-    err "  C. HKUST tunnel (Ivanti) の認証/再接続が未完了"
-    err "     → Ivanti Secure Access の接続状態と認証完了を確認してください。"
+    err "  C. HKUST tunnel (Ivanti) authentication / reconnection is incomplete."
+    err "     -> Check Ivanti Secure Access connection status and complete authentication."
     exit 2
 fi
 
-err "L3 経路は ${egress} で正しいですが TCP 22 が通りません。L4 (firewall / packet filter) 側で塞がれています。"
+err "L3 routing via ${egress} is correct, but TCP 22 is unreachable. L4 (firewall / packet filter) is blocked."
 err ""
 if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" ]]; then
-    err "net-up-local.sh は pf main ruleset flush を自動実行する設計ですが、この実行では完了できませんでした。"
-    err "sudo 認証を完了できる対話ターミナルから net-up-local.sh を再実行してください。"
+    err "net-up-local.sh normally flushes pf main rules automatically, but could not complete it in this run."
+    err "Rerun net-up-local.sh in an interactive terminal where sudo authentication can complete."
 else
-    err "AI 実行では sudo prompt を扱えません。別ターミナルで helper を実行してください："
+    err "AI execution cannot handle sudo prompts. Run the helper in a separate terminal:"
     err "    bash \"${SKILL_DIR}/scripts/net-up-local.sh\""
 fi
 exit 2

@@ -1,14 +1,14 @@
 #!/bin/bash
-# 共通定数とヘルパー。他スクリプトから source される。
+# Shared constants and helpers, sourced by the other scripts.
 #
-# このスキルは HPC4 (143.89.184.3) への host route 一点だけを管理する。
-# default route や Claude 経路には絶対に触らない（破綻すると user が私に相談できなくなる）。
-# VPN 製品の判別もしない。kernel の routing table に「143.89/16 を持つ IF」が
-# あるか無いか、それだけで判断する。
+# This skill manages only the host route to HPC4 (143.89.184.3).
+# Never touch the default route or Claude traffic: users must be able to ask for help.
+# Do not identify VPN products. Check whether the kernel routing table has
+# an interface with a 143.89/16 address; that is the only criterion.
 
 set -u
 
-# --- グループ共通の固定パラメータ -------------------------------------------
+# --- Fixed group-wide parameters -------------------------------------------
 HPC4_HOST="hpc4.ust.hk"
 HPC4_IP="143.89.184.3"
 
@@ -16,7 +16,7 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SSH_CONFIG="${SKILL_DIR}/ssh_config"
 USER_CONF="${SKILL_DIR}/user.conf.local"
 
-# --- 個人設定の読み込み -----------------------------------------------------
+# --- Load personal configuration -------------------------------------------
 if [[ -f "$USER_CONF" ]]; then
     # shellcheck disable=SC1090
     source "$USER_CONF"
@@ -28,21 +28,21 @@ fi
 
 require_user_conf() {
     if [[ -z "${HPC4_USER:-}" ]]; then
-        printf "[hpc4][err] %s\n" "個人設定 ${USER_CONF} がありません。setup フロー (scripts/write-user-conf.sh <itso_username>) を実行してください。" >&2
+        printf "[hpc4][err] %s\n" "Personal configuration ${USER_CONF} is missing. Run setup (scripts/write-user-conf.sh <itso_username>)." >&2
         exit 1
     fi
 }
 
-# --- ログ出力 ---------------------------------------------------------------
+# --- Logging ---------------------------------------------------------------
 log()  { printf "[hpc4] %s\n" "$*"; }
 ok()   { printf "[hpc4][ok] %s\n" "$*"; }
 warn() { printf "[hpc4][warn] %s\n" "$*" >&2; }
 err()  { printf "[hpc4][err] %s\n" "$*" >&2; }
 
-# sudo が必要な操作を安全に実行する。
+# Safely execute operations requiring sudo.
 #
-# 既定では AI 実行から sudo を試さない。sudo password / Touch ID は
-# user の Terminal 専用 helper (net-up-local.sh) だけが扱う。
+# Do not attempt sudo from AI execution by default. Password / Touch ID prompts
+# are handled only by the user's Terminal helper (net-up-local.sh).
 sudo_cmd() {
     if [[ "$(id -u)" -eq 0 ]]; then
         "$@"
@@ -52,7 +52,7 @@ sudo_cmd() {
     if [[ "${HPC4_ALLOW_INTERACTIVE_SUDO:-}" == "1" && -t 0 ]]; then
         local tmp status line
         tmp="$(mktemp -t hpc4-sudo.XXXXXX)" || {
-            err "sudo 実行用の一時ファイルを作成できませんでした。"
+            err "Could not create a temporary file for sudo."
             return 20
         }
 
@@ -68,16 +68,16 @@ sudo_cmd() {
         return "$status"
     fi
 
-    err "sudo が必要ですが、AI 実行から sudo prompt は扱いません。"
-    err "別ターミナルで次を一度実行してから再試行してください:"
+    err "sudo is required, but AI execution cannot handle sudo prompts."
+    err "Run the following once in a separate terminal, then retry:"
     err "  bash \"${HPC4_LOCAL_HELPER:-${SKILL_DIR}/scripts/net-up-local.sh}\""
     return 20
 }
 
-# --- HPC4 への到達性判定 ---------------------------------------------------
+# --- HPC4 reachability checks ----------------------------------------------
 
-# kernel に HPC4 をどの IF に出すか聞く。出力 1 行：「<iface> [<gateway>]」
-# gateway が無い／link-local の場合は iface のみ返す。kernel が答えない場合は空。
+# Ask the kernel for the HPC4 egress interface. Output: <iface> [<gateway>].
+# Return only the interface for absent/link-local gateways; empty if unavailable.
 hpc4_route_resolve() {
     route get "$HPC4_IP" 2>/dev/null | awk '
         /interface:/ {iface=$2}
@@ -90,16 +90,16 @@ hpc4_route_resolve() {
     '
 }
 
-# 与えた IF が 143.89/16 の IPv4 を持っているか（= HKUST 圏に居る or HKUST tunnel が立っている証拠）
+# Does this interface have a 143.89/16 IPv4 address (HKUST network or tunnel)?
 iface_has_hkust_ip() {
     [[ -n "${1:-}" ]] || return 1
     ifconfig "$1" 2>/dev/null | awk '/inet 143\.89\./{found=1} END{exit !found}'
 }
 
-# 与えた IF が HKUST 到達能力を持つか。
-# (1) 143.89/16 IP を直接保持（HKUST VPN / 有線）
-# (2) eduroam NAT: private IP を持ち、routing table に 143.89.x → この IF の host route が存在
-# (3) HKUST eduroam 特有の 10.79/16 IP を保持
+# Can the given interface reach HKUST?
+# (1) A direct 143.89/16 address (HKUST VPN / wired).
+# (2) eduroam NAT: private IP and a 143.89.x host route through this interface.
+# (3) A 10.79/16 address specific to HKUST eduroam.
 iface_is_hkust_capable() {
     [[ -n "${1:-}" ]] || return 1
     ifconfig "$1" 2>/dev/null | awk '/inet 143\.89\./{found=1} END{exit !found}' && return 0
@@ -109,25 +109,25 @@ iface_is_hkust_capable() {
     ifconfig "$1" 2>/dev/null | grep -q 'inet 10\.79\.'
 }
 
-# 全 IF を走査して HKUST 到達能力を持つ最初の IF 名を返す（無ければ空文字）。
-# routing table と独立に「この Mac には HKUST 圏に届く能力があるか」を判定する。
-# stale な host pin が route get の結果を歪めても、これは騙されない。
+# Scan all interfaces and return the first HKUST-capable interface, or empty.
+# Determine HKUST reachability independently of the routing table.
+# A stale host pin that distorts route get does not affect this check.
 #
-# 判定順:
-#   (1) 143.89/16 IP を直接持つ IF（HKUST VPN / 有線）
-#   (2) HKUST eduroam 特有の 10.79/16 IP を持つ物理 IF
-#   (3) routing table に「143.89.x → private GW 経由で物理 IF」が存在
-#       (eduroam NAT + 既存 host route) — ただし stale 経路で誤検出しないよう
-#       iface_is_hkust_capable で再検証する
-#   (4) route get が physical IF を返し、それが iface_is_hkust_capable を満たす
-#       (別 VPN が default route を握っていない場合)
+# Detection order:
+#   (1) An interface with a direct 143.89/16 address (HKUST VPN / wired).
+#   (2) A physical interface with an HKUST eduroam 10.79/16 address.
+#   (3) A route for 143.89.x through a private gateway on a physical interface.
+#       (eduroam NAT + existing host route); revalidate to avoid stale routes
+#       with iface_is_hkust_capable.
+#   (4) route get returns a physical interface passing iface_is_hkust_capable.
+#       (When another VPN does not own the default route.)
 #
-# 重要: Path 3/4 は heuristic なので、必ず iface_is_hkust_capable で確証を取る。
-# これを怠ると過去 session の stale な netstat エントリ（例: 以前 HKUST eduroam
-# 圏に居た時の `143.89.x → 10.79.255.254 → en0`）が現在の en0 (172.22/22 等の
-# 別ネット) を誤って HKUST capable と判定し、net-up.sh が pin を add → 次の
-# iface_is_hkust_capable で reject → stale 認定して delete → ... の無限ループを
-# 引き起こす。
+# Paths 3/4 are heuristics: always confirm with iface_is_hkust_capable.
+# Otherwise a stale netstat entry from a previous HKUST eduroam session,
+# such as `143.89.x -> 10.79.255.254 -> en0`, can incorrectly classify en0
+# on another network (e.g. 172.22/22) as HKUST-capable, causing net-up.sh
+# to add a pin, reject it on the next iface_is_hkust_capable check, delete it,
+# and repeat indefinitely.
 find_hkust_iface() {
     local iface
     iface=$(ifconfig 2>/dev/null | awk '
@@ -161,20 +161,20 @@ find_hkust_iface() {
     fi
 }
 
-# 既存の HPC4 host route が指す IF（無ければ空）
+# Interface of the existing HPC4 host route, or empty if absent.
 current_hpc4_iface() {
     netstat -rn 2>/dev/null | awk -v ip="$HPC4_IP" '$1==ip {print $NF; exit}'
 }
 
-# 指定 IF の最初の IPv4 アドレス（無ければ空）
+# First IPv4 address of the given interface, or empty if absent.
 iface_ipv4() {
     [[ -n "${1:-}" ]] || return 1
     ifconfig "$1" 2>/dev/null | awk '/inet /{print $2; exit}'
 }
 
-# HPC4 pin が指す IF の IPv4 を返す（BindAddress として nc / ssh に渡す用）。
-# multi-homed (en0 + utun) で kernel が誤った egress を選ぶのを防ぐ。
-# pin が無いか IF が空なら空文字を返す（呼出側で BindAddress なしに fallback）。
+# IPv4 of the HPC4 pinned interface, used as BindAddress for nc / ssh.
+# Prevent the kernel from selecting the wrong egress on multihomed Macs (en0 + utun).
+# Return empty if no pin/interface exists; callers fall back without BindAddress.
 hpc4_bind_addr() {
     local iface
     iface="$(current_hpc4_iface)"
@@ -182,8 +182,8 @@ hpc4_bind_addr() {
     iface_ipv4 "$iface"
 }
 
-# 指定 IF の default gateway（DHCP / VPN 由来）。無ければ空。
-# netstat の per-iface default 行を最優先、無ければ ipconfig の DHCP option を見る。
+# Default gateway of the given interface (DHCP / VPN), or empty if absent.
+# Prefer netstat's per-interface default, then ipconfig's DHCP option.
 default_gateway_for_iface() {
     [[ -n "${1:-}" ]] || return 1
     local gw
@@ -207,11 +207,11 @@ hpc4_pin_route() {
     sudo_cmd route -n add -host "$HPC4_IP" -gateway "$gw"
 }
 
-# TCP 22 が通るか（タイムアウト秒、既定 5）
-# macOS 既定 nc は BSD 系で -G が connect timeout、-w が overall I/O timeout
-# pin が立っていればその IF の IPv4 を source として bind し、multi-homed (en0 + utun)
-# で kernel が誤った egress を選んで「pin はあるのに probe は VPN 側に流れた」状態
-# になるのを防ぐ。pin が無い時は通常の autoselect。
+# Is TCP port 22 reachable? Timeout in seconds, default 5.
+# macOS BSD nc: -G is the connect timeout; -w is the overall I/O timeout.
+# If pinned, bind to that interface's IPv4 source address on multihomed Macs
+# (en0 + utun), preventing probes from taking the VPN egress despite a pin.
+# Without a pin, use normal source-address selection.
 tcp22_ok() {
     local t="${1:-5}" bind_addr
     bind_addr="$(hpc4_bind_addr || true)"
@@ -222,17 +222,17 @@ tcp22_ok() {
     fi
 }
 
-# ping で疎通確認（タイムアウト秒、既定 2）
+# Ping reachability check. Timeout in seconds, default 2.
 ping_ok() {
     local t="${1:-2}"
     ping -c 2 -W "${t}000" "$HPC4_IP" >/dev/null 2>&1
 }
 
-# route socket が permission で塞がれているか。
-# AI sandbox / permission 制限環境では `route -n get` / `ping` /
-# 一部 TCP probe が "Operation not permitted" を返し、実体は届いていても
-# 「経路欠落」と誤診断される。この helper はその false negative の入口を捕える。
-# 真なら呼出側は route 操作系（sudo route add 等）を促してはいけない。
+# Is route-socket access denied by permissions?
+# In AI sandboxes / environments with permission restrictions, `route -n get`, `ping`, and
+# some TCP probes return "Operation not permitted" despite real reachability.
+# This helper catches the restriction before it is misdiagnosed as a missing route.
+# If true, callers must not suggest route changes such as sudo route add.
 route_probe_restricted() {
     local out
     out=$(route -n get "$HPC4_IP" 2>&1)
@@ -244,8 +244,8 @@ route_probe_restricted() {
     return 1
 }
 
-# --- SSH ラッパ用ヘルパ -----------------------------------------------------
-# macOS 既定 bash 3.2 互換のため mapfile / nameref は使わない
+# --- SSH wrapper helpers ---------------------------------------------------
+# Avoid mapfile / nameref for compatibility with macOS Bash 3.2.
 
 build_ssh_opts() {
     local bind_addr

@@ -26,8 +26,13 @@ EOF
 op="$1"; src="$2"; dst="$3"
 
 if ! tcp22_ok 1; then
-    log "Route not yet ready. Running net-up.sh"
-    bash "$(dirname "$0")/net-up.sh" || exit $?
+    if route_probe_restricted; then
+        log "Detected restricted route probes. Attempting the transfer directly."
+    else
+        err "TCP 22 is unreachable. Run setup / recovery once in an interactive terminal:"
+        err "  bash \"${SKILL_DIR}/scripts/setup-local.sh\""
+        exit 3
+    fi
 fi
 
 # rsync's -e is a single string, so quoting bugs creep in if SSH_CONFIG has

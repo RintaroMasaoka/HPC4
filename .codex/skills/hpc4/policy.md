@@ -1,72 +1,66 @@
-# HPC4 接続規約 — ITSO 公式準拠の参照ドキュメント
+# HPC4 connection policy — reference based on ITSO documentation
 
-このファイルは HKUST ITSO が公開している HPC4 cluster の接続規約のうち、本 skill が依拠している部分を記録したもの。SKILL.md は運用最小限のみとし、規約の正確な根拠が必要になった時のみこのファイルを参照する。
+This file records the parts of HKUST ITSO's published HPC4 connection requirements that this skill relies on. SKILL.md focuses on operations; consult this reference when the policy basis or surrounding context is needed.
 
-## 出典
+## Sources
 
 - [HPC4 - HOW TO LOGIN](https://itso.hkust.edu.hk/services/academic-teaching-support/high-performance-computing/hpc4/login)
 - [Off-Campus Wi-Fi Connection for Campus Community](https://itso.hkust.edu.hk/services/general-it-services/wifi/off-campus-wi-fi)
 - [HKUST Hotspot Locations](https://itso.hkust.edu.hk/services/general-it-services/wifi/hotspot-locations)
 - [Secure Remote Access (VPN) Overview](https://itso.hkust.edu.hk/services/cyber-security/vpn/overview)
 
-最終確認: 2026-04-29
+Last verified: 2026-04-29. Translation does not constitute a new policy verification.
 
-## HPC4 への接続パス（ITSO 公式）
+## Connection paths to HPC4
 
-ITSO HPC4 login ページに明記されている接続要件：
+The ITSO HPC4 login page specifies:
 
-| 場面 | 必要な接続 |
+| Location | Required connection |
 |---|---|
-| **on-campus** | wired connection または "eduroam" Wi-Fi |
-| **off-campus** | Secure Remote Access (VPN) |
+| **On campus** | Wired connection or eduroam Wi-Fi |
+| **Off campus** | Secure Remote Access (VPN) |
 
-ここで言う "Secure Remote Access (VPN)" は **Ivanti Secure Access** クライアントを指す（ITSO VPN overview ページより。旧名 Pulse Secure）。
+The VPN overview identifies **Ivanti Secure Access**, previously named Pulse Secure, as the client. It explains that VPN users receive an HKUST IP address, enabling access to restricted campus resources while away from campus.
 
-VPN overview ページの記述：
+The skill's operational model uses `143.89/16` for Ivanti / wired networking and the HKUST campus eduroam internal NAT pool (`10.79/16`), which reaches HPC4 through an internal router. **HPC4 (143.89.184.3) requires a path through HKUST internal networking.**
 
-> "When connected, you will be assigned with a HKUST IP address instead of the one at home or while traveling, enabling access to restricted campus resources."
+## What counts as on campus: federated eduroam
 
-つまり Ivanti は HKUST の 143.89/16 IP を割り当てる。一方、HKUST キャンパス内 eduroam は HKUST 内部の NAT pool (`10.79/16`) を払い出し、内部 router 経由で HPC4 に届く。**HPC4 (143.89.184.3) はこのいずれか — HKUST 内部 network から見える経路 — からしか到達できない**ので、これが skill が判定基準にしている事実の出所。
+ITSO's Hotspot Locations page lists HKUST eduroam coverage within the physical campus: common areas, Shaw Auditorium, catering outlets, the library, teaching venues, offices, laboratories, car parks, and student halls.
 
-## "on-campus" の境界 — eduroam の federated 性質
+eduroam is a federated roaming service. The same SSID is also available at other institutions, including:
 
-ITSO の Hotspot Locations ページが列挙する HKUST eduroam の coverage は **HKUST 物理キャンパス内** のみ：
+- Other universities such as PolyU, CityU, and HKU.
+- HKSTP facilities, including **Data Technology Hub at TKO InnoPark**.
+- Many airports and railway stations.
+- Many universities overseas.
 
-> Common Areas (amphitheater, piazzas, sports facilities, fountains, bus stops), Shaw Auditorium, Catering Outlets, Lee Shau Kee Library, Teaching Venues, Office Areas, Laboratory Areas, Car Parks, Student Halls
+Authenticating with an HKUST account at those locations does not place the client on HKUST's internal network. The visited institution assigns its own IP pool (for example, `172.22/16` at DT Hub), rather than HKUST's `143.89/16` or campus eduroam `10.79/16`. **These connections are off campus for HPC4 access**, so a separate Ivanti VPN connection is required.
 
-一方 eduroam は federated roaming service であり、**HKUST 以外の機関でも同じ SSID で繋がる**：
+Being connected to eduroam alone does not establish HKUST network reachability.
 
-- 他大学（PolyU, CityU, HKU 等）
-- HKSTP の施設（**Data Technology Hub at TKO InnoPark** など）
-- 多くの空港・駅
-- 海外の多くの大学
+### Mapping to the skill's detection criteria
 
-これらの場所で eduroam に HKUST アカウントで認証して繋がっても、配布される IP はその施設の NAT pool（例：DT Hub では `172.22/16`）であり HKUST 内部 network（有線 / Ivanti の `143.89/16` または HKUST キャンパス eduroam の `10.79/16`）ではない。**ITSO 視点ではこれは "off-campus" 扱い** であり、HPC4 へ届くにはそこから別途 Ivanti VPN を張る必要がある。
+`scripts/common.sh` functions `find_hkust_iface` and `iface_is_hkust_capable` check for interface IPv4 in `143.89/16` or `10.79/16`, or a `143.89.x` host route through an internal gateway over eduroam NAT. This distinguishes campus connectivity from federated eduroam elsewhere.
 
-「eduroam に繋がっている」と「HKUST 圏内に居る」は別物、というのがこの規約の最も非自明な点。
-
-### 本 skill の判定基準との対応
-
-本 skill は「IF が `143.89/16` または HKUST eduroam の `10.79/16` IPv4 を持っているか（あるいは eduroam NAT 経由で `143.89.x` 宛 host route が HKUST 内部 GW を指しているか）」で HKUST 圏内を判定する（`scripts/common.sh::find_hkust_iface` / `iface_is_hkust_capable`）。これは上記の federated 問題を一発で正しく弾くための設計：
-
-| 場所・経路 | IF が持つ IP | skill 判定 | ITSO 規約上の扱い |
+| Location / path | Interface IP | Skill result | Policy interpretation |
 |---|---|---|---|
-| HKUST キャンパス内 eduroam | 10.79/16 | ok | on-campus |
-| HKUST 有線 | 143.89/16 | ok | on-campus |
-| Ivanti SSL VPN（どこからでも） | utun に 143.89/16 | ok | off-campus 救済策 |
-| DT Hub eduroam | 172.22/16 | ng | off-campus（規約上 Ivanti が必要） |
-| 他大学 eduroam | その大学の pool | ng | off-campus |
-| 自宅 ISP 直 | 公衆 IPv4 | ng | off-campus |
+| HKUST campus eduroam | 10.79/16 | ok | On campus |
+| HKUST wired networking | 143.89/16 | ok | On campus |
+| Ivanti SSL VPN from any location | 143.89/16 on utun | ok | Off-campus access via VPN |
+| DT Hub eduroam | 172.22/16 | ng | Off campus; Ivanti required |
+| Other university eduroam | That university's pool | ng | Off campus |
+| Direct home ISP connection | Public IPv4 | ng | Off campus |
 
-## 認証
+## Authentication
 
-ITSO HPC4 login ページの認証要件：
+The ITSO HPC4 login page describes two methods:
 
-1. **Password + Duo MFA**：username（domain suffix なし）+ password を入れた後、Duo authentication method を選択
-2. **SSH key authentication**：公開鍵を `~/.ssh/authorized_keys` に登録すれば password と Duo の両方が省略される
+1. **Password + Duo MFA:** enter the username without a domain suffix and the password, then choose a Duo authentication method.
+2. **SSH key authentication:** register the public key in `~/.ssh/authorized_keys` to omit both password and Duo prompts.
 
-本 skill は (2) を前提とし、`ssh-copy-id` による公開鍵登録を setup フローに組み込んでいる。
+The skill uses the second method and includes public-key registration through `ssh-copy-id` in its setup flow.
 
-## skill 内での扱い
+## Use within the skill
 
-このファイルの内容は SKILL.md には**重複させない**。SKILL.md は運用最小限のみとし、規約の根拠や周辺事情が必要になった時に Codex / user がこのファイルを開く。
+Keep the detailed policy rationale here rather than duplicating it in SKILL.md. Agents and users can consult this file when source evidence or surrounding context is needed.

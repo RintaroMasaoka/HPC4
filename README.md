@@ -50,9 +50,10 @@ mkdir -p .claude/skills && mv ~/Downloads/HPC4-main/.claude/skills/hpc4 .claude/
 
 **Just type `/hpc4` in chat.** If not yet set up, the setup flow runs and asks for what it needs. If already set up, it asks what you want to do — answer in plain English (or Japanese).
 
-First-time setup needs at most two manual actions from you:
-1. Tell Claude your ITSO username (in chat).
-2. Run `ssh-copy-id` once in a separate terminal (clears password + 2FA).
+First-time setup starts by asking for your ITSO username in chat. The interactive steps depend on the agent:
+
+- **Codex Desktop:** run `setup-local.sh` once in your own Terminal when prompted. It handles network repair, SSH key selection, `ssh-add`, and public-key registration with password + 2FA in the same session. Codex reads the setup log and state afterward if further diagnosis is needed.
+- **Claude Code:** run `net-up-local.sh` when prompted for network repair or SSH key selection / `ssh-add`. If the public key is not registered, follow its `ssh-copy-id` command once in Terminal and complete password + 2FA.
 
 After that, ControlMaster caches the SSH session for 12 hours, so no more passwords.
 
@@ -71,10 +72,12 @@ Claude/Codex do not accept your macOS password in chat, and they should not wait
 
 ```bash
 bash .claude/skills/hpc4/scripts/net-up-local.sh   # Claude layout
-bash .codex/skills/hpc4/scripts/net-up-local.sh    # Codex layout
+bash .codex/skills/hpc4/scripts/setup-local.sh     # Codex layout
 ```
 
-After the helper succeeds, return to chat and the agent can re-check status and continue.
+Run the command the agent provides: it uses an absolute path so it works from a new Terminal window. The relative examples above assume you are in the repository root.
+
+After the helper succeeds, return to chat and the agent can re-check status and continue. Script messages, prompts, comments, and agent instructions are in English. The Japanese guide remains available in [README.ja.md](README.ja.md).
 
 ## Target environment
 
@@ -189,7 +192,7 @@ Internals, safety, sharing notes. Skip this if you just want to use the skill.
 | Item | Change |
 |---|---|
 | route table | One host route added (`143.89.184.3` only) |
-| pf ruleset | Narrow `com.apple/hpc4` or skill-local anchor rules for HPC4 only when a full-VPN kill switch requires it |
+| pf ruleset | The user-terminal helper may flush the main ruleset once when a VPN kill switch blocks TCP 22 despite correct routing; the former anchor strategy has been removed |
 | `/tmp/hpc4-cm-*` | SSH ControlMaster sockets |
 
 ### Not touched
@@ -214,7 +217,7 @@ To tear down explicitly, ask Claude to "tear down the route". It idempotently de
 
 - deleting a stale host route for `143.89.184.3`
 - adding a host route for `143.89.184.3`
-- applying or flushing a narrow pf anchor for `143.89.184.3`
+- flushing the pf main ruleset once when required for L4 recovery
 
 No external input is interpolated into the sudo commands, so there's no shell-injection surface. With Touch ID enabled, the fingerprint suffices.
 
@@ -231,9 +234,9 @@ No external input is interpolated into the sudo commands, so there's no shell-in
 
 ### Conflicts
 
-- **VPN client kill-switch / NEPacketTunnelProvider blocking 143.89.184.3 at L4**: kernel routing is correct but TCP 22 doesn't go through. `net-up.sh` detects this and prints terminal-readable instructions for whitelisting 143.89.184.3 in the VPN client GUI before exiting.
+- **VPN client kill-switch / NEPacketTunnelProvider blocking 143.89.184.3 at L4**: kernel routing is correct but TCP 22 doesn't go through. The user-terminal helper flushes pf main rules once and rechecks. If that does not restore access, it prints terminal-readable guidance to check VPN settings or complete Ivanti authentication.
 - **Little Snitch / LuLu**: as long as the relevant app is allowed, the host route punches through. If they're blocking, allow them separately.
-- **Other VPN clients running concurrently**: the skill does not identify VPN products. If any interface holds a 143.89/16 IP, the skill pins HPC4 traffic to that interface; otherwise it tells the user to start Ivanti or get on the campus network.
+- **Other VPN clients running concurrently**: the skill does not identify VPN products. If an interface has HKUST reachability (`143.89/16` or campus eduroam `10.79/16`), the helper pins HPC4 traffic there when needed; otherwise it tells the user to start Ivanti or get on the campus network.
 
 ### Personal info
 
@@ -246,11 +249,11 @@ No external input is interpolated into the sudo commands, so there's no shell-in
 <details>
 <summary><b>Network-route auto-detection</b></summary>
 
-The skill does not identify VPN products. It asks the kernel "which interface egresses HPC4 (143.89.184.3)?" and decides solely based on whether that interface holds a 143.89/16 IP:
+The skill does not identify VPN products. It asks the kernel "which interface egresses HPC4 (143.89.184.3)?" and decides solely based on whether an interface has HKUST reachability (`143.89/16` or campus eduroam `10.79/16`):
 
-- At least one interface reaches HKUST (en0 directly on 143.89/16, or Ivanti utun with a 143.89.\* IP) → pin a host route for HPC4 to that interface. Even if another VPN later changes the default, longest-prefix-match keeps HPC4 routed correctly.
+- At least one interface reaches HKUST (wired `143.89/16`, campus eduroam `10.79/16`, or Ivanti utun `143.89/16`) → use the natural route if it works, or have the user-terminal helper pin a host route when needed. Even if another VPN later changes the default, longest-prefix-match keeps HPC4 routed correctly.
 - No interface reaches HKUST (another VPN owning the default, or fully off-campus) → pinning would be useless; bail and tell the user to start Ivanti / switch to a campus network.
-- Routing OK but TCP 22 fails (VPN client kill-switch / NEPacketTunnelProvider blocking at L4) → print terminal-readable steps for whitelisting 143.89.184.3 in the VPN client GUI.
+- Routing OK but TCP 22 fails → the user-terminal helper flushes pf main rules once and rechecks. If still blocked, inspect VPN settings / tunnel authentication; system-enforced tunneling cannot be overridden from user space.
 
 For per-layer behavior and the gotchas, see the "How the network layer works" and "macOS-side connection traps" sections of [SKILL.md](.claude/skills/hpc4/SKILL.md).
 
@@ -262,7 +265,7 @@ For per-layer behavior and the gotchas, see the "How the network layer works" an
 ```
 .claude/skills/hpc4/
 ├── SKILL.md              Claude-facing instructions (defines this skill's behavior)
-├── README.md             this file (human-facing guide)
+├── policy.md             ITSO connection-policy reference
 ├── ssh_config            HPC4-only SSH config (HostName pinned to a literal IP)
 ├── user.conf.local       personal config (gitignored; produced by setup)
 └── scripts/
@@ -274,17 +277,30 @@ For per-layer behavior and the gotchas, see the "How the network layer works" an
     ├── net-down-local.sh user-terminal helper for sudo teardown
     ├── ssh-run.sh        run a command on HPC4
     ├── xfer.sh           file transfer (scp/rsync)
+    ├── ssh-wrap.sh       SSH wrapper for rsync
     └── write-user-conf.sh  generate user.conf.local
 ```
 
-Codex uses the analogous project-local layout:
+The human-facing guides are `README.md` and `README.ja.md` at the repository root. Codex uses this project-local layout:
 
 ```
 .codex/skills/hpc4/
-├── SKILL.md
+├── SKILL.md              Codex-facing instructions
+├── policy.md             ITSO connection-policy reference
 ├── ssh_config
 ├── user.conf.local       personal config (gitignored; produced by setup)
+├── setup-local.log       local setup log (gitignored)
+├── setup-local.state.local  local setup state (gitignored)
 └── scripts/
+    ├── common.sh
+    ├── status.sh
+    ├── setup-local.sh    user-terminal helper for network and SSH setup
+    ├── net-down.sh
+    ├── net-down-local.sh
+    ├── ssh-run.sh
+    ├── ssh-wrap.sh       SSH wrapper for rsync
+    ├── xfer.sh
+    └── write-user-conf.sh
 ```
 
 </details>
@@ -294,8 +310,8 @@ Codex uses the analogous project-local layout:
 
 If HKUST notifies you that `hpc4.ust.hk` has a new IP, update both of these:
 
-- `HPC4_IP` in [scripts/common.sh](scripts/common.sh)
-- `HostName` in [ssh_config](ssh_config)
+- `HPC4_IP` in [Claude common.sh](.claude/skills/hpc4/scripts/common.sh) and [Codex common.sh](.codex/skills/hpc4/scripts/common.sh)
+- `HostName` in [Claude ssh_config](.claude/skills/hpc4/ssh_config) and [Codex ssh_config](.codex/skills/hpc4/ssh_config)
 
 Keep them in sync (drift causes "ping works but ssh doesn't" type inconsistencies). Expect this maybe once every few years.
 
@@ -323,7 +339,9 @@ Normally you'd just ask Claude. When you want to call them directly:
 |---|---|
 | `bash .claude/skills/hpc4/scripts/status.sh` | Show current connection status (no sudo). |
 | `bash .claude/skills/hpc4/scripts/write-user-conf.sh <itso_username>` | Generate `user.conf.local` (first-time setup). |
-| `bash .claude/skills/hpc4/scripts/net-up.sh` | Pin the HPC4 host route (idempotent). |
+| `bash .claude/skills/hpc4/scripts/net-up.sh` | Diagnose routing; delegate sudo repair to the Terminal helper (idempotent). |
+| `bash .claude/skills/hpc4/scripts/net-up-local.sh` | Repair networking and prepare the SSH key in your own Terminal. |
+| `bash .codex/skills/hpc4/scripts/setup-local.sh` | Complete Codex network and SSH setup in your own Terminal; record setup log/state. |
 | `bash .claude/skills/hpc4/scripts/net-down.sh` | Remove the HPC4 host route and ControlMaster. |
 | `bash .claude/skills/hpc4/scripts/ssh-run.sh '<command>'` | Run an arbitrary command on HPC4. |
 | `bash .claude/skills/hpc4/scripts/xfer.sh put <local> <remote>` | Upload a file to HPC4. |
@@ -331,6 +349,8 @@ Normally you'd just ask Claude. When you want to call them directly:
 | `bash .claude/skills/hpc4/scripts/xfer.sh put-r <local> <remote>` | Send a directory via rsync. |
 | `bash .claude/skills/hpc4/scripts/xfer.sh get-r <remote> <local>` | Pull a directory via rsync. |
 
-`ssh-run.sh` / `xfer.sh` internally call the equivalent of `net-up.sh` automatically, so you can call them directly without thinking about routing.
+Most script names also exist under `.codex/skills/hpc4/scripts/`. Codex uses `setup-local.sh` for interactive setup and recovery; it does not have `net-up.sh` or `net-up-local.sh`.
+
+Claude's `ssh-run.sh` / `xfer.sh` invoke `net-up.sh` when needed. Codex's versions attempt the requested operation on an already configured connection and direct you to `setup-local.sh` if recovery is needed. In both layouts, restricted route probes can trigger a direct SSH attempt instead of unnecessary route changes.
 
 </details>

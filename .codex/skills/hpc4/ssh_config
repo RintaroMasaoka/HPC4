@@ -6,7 +6,7 @@ Host hpc4 hpc4.ust.hk
     # HostName is a literal IP. macOS ssh's getaddrinfo only consults
     # /etc/resolv.conf, so when Ivanti / a full VPN is up the ust.hk domain
     # cannot be resolved and ssh dies with "Could not resolve". The IP itself
-    # matches HPC4_IP in net-up.sh / common.sh.
+    # matches HPC4_IP in common.sh.
     HostName 143.89.184.3
     HostKeyAlias hpc4.ust.hk
     # User is set by scripts via -l (each member's ITSO account name).
